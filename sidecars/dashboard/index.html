@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Token Tracker Dashboard</title>
+  <style>
+    :root {
+      --bg: var(--vscode-editor-background, #121214);
+      --card-bg: var(--vscode-sideBar-background, #18181b);
+      --fg: var(--vscode-editor-foreground, #f4f4f5);
+      --muted: var(--vscode-descriptionForeground, #a1a1aa);
+      --border: var(--vscode-widget-border, rgba(255, 255, 255, 0.08));
+      --primary: #3b82f6;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --radius: 8px;
+      --font: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--font);
+      font-size: 13px;
+      padding: 14px;
+      line-height: 1.4;
+      overflow-y: auto;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+    .pulse-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+    }
+    .header-actions { display: flex; align-items: center; gap: 8px; }
+    .badge {
+      font-size: 11px; padding: 2px 8px; border-radius: 12px;
+      background: rgba(59, 130, 246, 0.15); color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.25);
+    }
+    .btn {
+      background: rgba(255, 255, 255, 0.06); border: 1px solid var(--border);
+      color: var(--fg); border-radius: 6px; padding: 4px 10px; cursor: pointer;
+      font-size: 11px; transition: all 0.2s;
+    }
+    .btn:hover { background: rgba(255, 255, 255, 0.12); }
+    
+    .grid { display: flex; flex-direction: column; gap: 12px; }
+    .card {
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 12px;
+    }
+    .card-title {
+      font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--muted); margin-bottom: 10px; font-weight: 600;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    
+    /* Radial Rings & Stats */
+    .ring-container { display: flex; align-items: center; gap: 14px; }
+    .ring-svg { width: 68px; height: 68px; transform: rotate(-90deg); flex-shrink: 0; }
+    .ring-bg { fill: none; stroke: rgba(255, 255, 255, 0.08); stroke-width: 6; }
+    .ring-val {
+      fill: none; stroke-width: 6; stroke-linecap: round;
+      stroke-dasharray: 175.9; stroke-dashoffset: 175.9;
+      transition: stroke-dashoffset 0.5s ease;
+    }
+    .ring-val.blue { stroke: var(--primary); }
+    .ring-val.green { stroke: var(--success); }
+    .ring-val.amber { stroke: var(--warning); }
+    .ring-val.red { stroke: var(--danger); }
+    
+    .stat-details { flex: 1; }
+    .stat-main { font-size: 18px; font-weight: 700; }
+    .stat-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    
+    /* Progress Bars */
+    .prog-bg {
+      width: 100%; height: 6px; background: rgba(255, 255, 255, 0.08);
+      border-radius: 3px; overflow: hidden; margin: 6px 0;
+    }
+    .prog-fill { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
+    
+    /* Two-column quota display */
+    .quota-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .quota-box {
+      background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border);
+      border-radius: 6px; padding: 8px; text-align: center;
+    }
+    .quota-box .q-title { font-size: 10px; color: var(--muted); margin-bottom: 4px; }
+    .quota-box .q-pct { font-size: 16px; font-weight: 700; }
+    .quota-box .q-reset { font-size: 10px; color: #93c5fd; margin-top: 4px; }
+
+    .footer-info {
+      font-size: 11px; color: var(--muted); display: flex;
+      justify-content: space-between; margin-top: 14px;
+      padding-top: 10px; border-top: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <span class="pulse-dot" id="tt-live-dot"></span>
+      <span>⚡ Token Tracker</span>
+      <span class="badge" id="tt-dash-version">--</span>
+    </div>
+    <div class="header-actions">
+      <span class="badge" id="tt-model-badge">Loading...</span>
+      <button class="btn" id="tt-refresh-btn">↻</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- Context Window Card -->
+    <div class="card">
+      <div class="card-title">
+        <span>Context Window Capacity</span>
+        <span id="tt-ctx-pct">0%</span>
+      </div>
+      <div class="ring-container">
+        <svg class="ring-svg" viewBox="0 0 64 64">
+          <circle class="ring-bg" cx="32" cy="32" r="28" />
+          <circle class="ring-val blue" id="tt-ctx-ring" cx="32" cy="32" r="28" />
+        </svg>
+        <div class="stat-details">
+          <div class="stat-main" id="tt-ctx-current">--</div>
+          <div class="stat-sub" id="tt-ctx-max">Limit: -- tokens</div>
+          <div class="prog-bg"><div class="prog-fill" id="tt-ctx-bar" style="width: 0%; background: var(--primary);"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Prompt Cache Efficiency Card -->
+    <div class="card">
+      <div class="card-title">
+        <span>Prompt Cache Hit Ratio</span>
+        <span id="tt-cache-ratio-tag" style="color: var(--success);">0%</span>
+      </div>
+      <div class="ring-container">
+        <svg class="ring-svg" viewBox="0 0 64 64">
+          <circle class="ring-bg" cx="32" cy="32" r="28" />
+          <circle class="ring-val green" id="tt-cache-ring" cx="32" cy="32" r="28" />
+        </svg>
+        <div class="stat-details">
+          <div class="stat-main" id="tt-cache-pct" style="color: var(--success);">--</div>
+          <div class="stat-sub" id="tt-cache-breakdown">Cached: -- | Uncached: --</div>
+          <div class="prog-bg"><div class="prog-fill" id="tt-cache-bar" style="width: 0%; background: var(--success);"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Context Compaction Headroom Card -->
+    <div class="card">
+      <div class="card-title">
+        <span>Auto-Compaction Headroom</span>
+        <span id="tt-compact-tag">Safe</span>
+      </div>
+      <div class="ring-container">
+        <svg class="ring-svg" viewBox="0 0 64 64">
+          <circle class="ring-bg" cx="32" cy="32" r="28" />
+          <circle class="ring-val amber" id="tt-compact-ring" cx="32" cy="32" r="28" />
+        </svg>
+        <div class="stat-details">
+          <div class="stat-main" id="tt-compact-left">-- KB left</div>
+          <div class="stat-sub" id="tt-compact-sub">Trajectory: -- KB / Threshold: 180 KB</div>
+          <div class="prog-bg"><div class="prog-fill" id="tt-compact-bar" style="width: 0%; background: var(--warning);"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Language Server Quota: Gemini -->
+    <div class="card">
+      <div class="card-title">
+        <span>Gemini Models Quota</span>
+      </div>
+      <div class="quota-grid">
+        <div class="quota-box">
+          <div class="q-title">5-Hour Limit</div>
+          <div class="q-pct" id="tt-g5h-pct">--%</div>
+          <div class="q-reset" id="tt-g5h-reset">Reset: --</div>
+        </div>
+        <div class="quota-box">
+          <div class="q-title">Weekly Limit</div>
+          <div class="q-pct" id="tt-gwk-pct">--%</div>
+          <div class="q-reset" id="tt-gwk-reset">Reset: --</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Language Server Quota: Claude & GPT -->
+    <div class="card">
+      <div class="card-title">
+        <span>Claude & GPT Models Quota</span>
+      </div>
+      <div class="quota-grid">
+        <div class="quota-box">
+          <div class="q-title">5-Hour Limit</div>
+          <div class="q-pct" id="tt-3p5h-pct">--%</div>
+          <div class="q-reset" id="tt-3p5h-reset">Reset: --</div>
+        </div>
+        <div class="quota-box">
+          <div class="q-title">Weekly Limit</div>
+          <div class="q-pct" id="tt-3pwk-pct">--%</div>
+          <div class="q-reset" id="tt-3pwk-reset">Reset: --</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-info">
+    <span id="tt-conv-id">Conv: --</span>
+    <span id="tt-step-count">Step: --</span>
+  </div>
+
+  <script>
+    const CIRCUMFERENCE = 175.9;
+
+    function setRingOffset(el, percent) {
+      if (!el) return;
+      const pct = Math.max(0, Math.min(100, percent));
+      const offset = CIRCUMFERENCE - (pct / 100) * CIRCUMFERENCE;
+      el.style.strokeDashoffset = offset;
+    }
+
+    async function updateDashboard(forceRefresh = false) {
+      try {
+        const url = forceRefresh ? "/api/refresh" : "/api/telemetry";
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // Model
+        document.getElementById("tt-model-badge").textContent = data.model?.displayName || "Unknown";
+
+        // Context Window
+        const ctxPct = data.contextWindow?.percentUsed || 0;
+        document.getElementById("tt-ctx-pct").textContent = ctxPct + "%";
+        document.getElementById("tt-ctx-current").textContent = (data.contextWindow?.currentTokensFormatted || "0") + " tokens";
+        document.getElementById("tt-ctx-max").textContent = "Limit: " + (data.contextWindow?.maxTokensFormatted || "1M") + " tokens";
+        setRingOffset(document.getElementById("tt-ctx-ring"), ctxPct);
+        document.getElementById("tt-ctx-bar").style.width = Math.min(100, ctxPct) + "%";
+
+        // Cache
+        const cachePct = data.cache?.hitRatioPercent || 0;
+        document.getElementById("tt-cache-ratio-tag").textContent = cachePct + "%";
+        document.getElementById("tt-cache-pct").textContent = cachePct + "%";
+        document.getElementById("tt-cache-breakdown").textContent = 
+          "Cached: " + (data.cache?.cachedTokensFormatted || "0") + " | Uncached: " + (data.cache?.uncachedTokensFormatted || "0");
+        setRingOffset(document.getElementById("tt-cache-ring"), cachePct);
+        document.getElementById("tt-cache-bar").style.width = Math.min(100, cachePct) + "%";
+
+        // Compaction
+        const compPct = data.compaction?.percentCompacted || 0;
+        const kbLeft = data.compaction?.kbRemaining || 0;
+        const isNear = data.compaction?.isNearCompaction;
+        const compactTag = document.getElementById("tt-compact-tag");
+        compactTag.textContent = isNear ? "Warning" : "Safe";
+        compactTag.style.color = isNear ? "var(--danger)" : "var(--success)";
+        document.getElementById("tt-compact-left").textContent = kbLeft + " KB left";
+        document.getElementById("tt-compact-sub").textContent = 
+          "Trajectory: " + (data.compaction?.trajectoryKb || 0) + " KB / Threshold: " + (data.compaction?.thresholdKb || 180) + " KB";
+        setRingOffset(document.getElementById("tt-compact-ring"), compPct);
+        document.getElementById("tt-compact-bar").style.width = Math.min(100, compPct) + "%";
+
+        // Quotas
+        const g5h = data.quota?.gemini?.fiveHour;
+        const gWk = data.quota?.gemini?.weekly;
+        if (g5h) {
+          document.getElementById("tt-g5h-pct").textContent = g5h.remainingPercent + "%";
+          document.getElementById("tt-g5h-reset").textContent = "Reset: " + g5h.countdown;
+        }
+        if (gWk) {
+          document.getElementById("tt-gwk-pct").textContent = gWk.remainingPercent + "%";
+          document.getElementById("tt-gwk-reset").textContent = "Reset: " + gWk.countdown;
+        }
+
+        const p5h = data.quota?.thirdParty?.fiveHour;
+        const pWk = data.quota?.thirdParty?.weekly;
+        if (p5h) {
+          document.getElementById("tt-3p5h-pct").textContent = p5h.remainingPercent + "%";
+          document.getElementById("tt-3p5h-reset").textContent = "Reset: " + p5h.countdown;
+        }
+        if (pWk) {
+          document.getElementById("tt-3pwk-pct").textContent = pWk.remainingPercent + "%";
+          document.getElementById("tt-3pwk-reset").textContent = "Reset: " + pWk.countdown;
+        }
+
+        // Footer
+        const conv = data.conversationId || "";
+        document.getElementById("tt-conv-id").textContent = "Conv: " + (conv.length > 8 ? conv.slice(0, 8) + "..." : conv);
+        document.getElementById("tt-step-count").textContent = "Step: " + (data.stepCount || 0);
+
+      } catch (err) {
+        console.error("Dashboard update failed:", err);
+      }
+    }
+
+    document.getElementById("tt-refresh-btn").addEventListener("click", () => updateDashboard(true));
+
+    updateDashboard(false);
+    setInterval(() => updateDashboard(false), 3000);
+  </script>
+</body>
+</html>

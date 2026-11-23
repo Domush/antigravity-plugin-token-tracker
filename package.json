@@ -1,0 +1,43 @@
+{
+  "name": "antigravity-plugin-token-tracker",
+  "displayName": "Antigravity Token Tracker",
+  "version": "1.0.0",
+  "description": "Hybrid Token Tracker plugin for Antigravity: real-time context window monitoring, prompt cache hit ratios, compaction countdowns, and Language Server quota telemetry via status-bar pill and native Aux Pane dashboard.",
+  "type": "module",
+  "main": "lib/telemetry-server.js",
+  "bin": {
+    "antigravity-plugin-token-tracker": "bin/cli.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "hooks",
+    "injector",
+    "sidecars",
+    "plugin.json",
+    "hooks.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node tests/run-all.js",
+    "audit-gate": "node scripts/audit-gate.js",
+    "install-injector": "node injector/install.js",
+    "uninstall-injector": "node injector/uninstall.js",
+    "start-telemetry": "node lib/telemetry-server.js --start",
+    "sidecar": "node sidecars/dashboard/server.mjs"
+  },
+  "keywords": [
+    "antigravity",
+    "token-tracker",
+    "prompt-cache",
+    "context-window",
+    "sidecar",
+    "telemetry"
+  ],
+  "author": "Antigravity Autonomous Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
