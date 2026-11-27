@@ -10,10 +10,10 @@ import path from "node:path";
 import os from "node:os";
 import http from "node:http";
 import { fileURLToPath } from "node:url";
-import { ConversationTracker, resolveSessionId } from "../lib/conversation-tracker.js";
+import { ConversationTracker, resolveSessionId, isSubagentPayload } from "../lib/conversation-tracker.js";
 import { QuotaService } from "../lib/quota-service.js";
 
-export { resolveSessionId };
+export { resolveSessionId, isSubagentPayload };
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -51,7 +51,7 @@ function notifyTelemetryServer(port, conversationId) {
     req.destroy(new Error("Timeout notifying telemetry server"));
   });
   req.on("error", (err) => {
-    console.debug("[TokenTracker SessionStart] Telemetry notify non-fatal error:", err.message);
+    console.error("[TokenTracker SessionStart] Telemetry notify non-fatal error:", err.message);
   });
   req.write(postData);
   req.end();
@@ -70,35 +70,39 @@ async function main() {
 
   const tracker = new ConversationTracker();
   const quotaService = new QuotaService();
-  const convId = resolveSessionId(payload);
+  const rawConvId = resolveSessionId(payload);
+  const convId = typeof rawConvId === "string" && rawConvId.trim() ? rawConvId.trim() : null;
+  const isSubagent = isSubagentPayload(payload, convId);
 
-  // Record active conversation in plugin data directory
-  const home = os.homedir();
-  const dataDir = path.join(home, ".gemini", "antigravity", "plugin_data", "token-tracker");
-  try {
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    const stateFile = path.join(dataDir, "active_conversation.json");
-    fs.writeFileSync(stateFile, JSON.stringify({ conversationId: convId, updatedAt: new Date().toISOString() }, null, 2), "utf8");
-
-    // Ping running telemetry server if registered
-    const regFile = path.join(dataDir, "telemetry-server.json");
-    if (fs.existsSync(regFile)) {
-      const reg = JSON.parse(fs.readFileSync(regFile, "utf8"));
-      if (reg.port) {
-        notifyTelemetryServer(reg.port, convId);
+  // Record active conversation in plugin data directory (skip for background subagents)
+  if (!isSubagent && convId) {
+    const home = os.homedir();
+    const dataDir = path.join(home, ".gemini", "antigravity", "plugin_data", "token-tracker");
+    try {
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
       }
+      const stateFile = path.join(dataDir, "active_conversation.json");
+      fs.writeFileSync(stateFile, JSON.stringify({ conversationId: convId, updatedAt: new Date().toISOString() }, null, 2), "utf8");
+
+      // Ping running telemetry server if registered
+      const regFile = path.join(dataDir, "telemetry-server.json");
+      if (fs.existsSync(regFile)) {
+        const reg = JSON.parse(fs.readFileSync(regFile, "utf8"));
+        if (reg.port) {
+          notifyTelemetryServer(reg.port, convId);
+        }
+      }
+    } catch {
+      // Non-fatal filesystem recording error
     }
-  } catch {
-    // Non-fatal filesystem recording error
   }
 
   let metrics = null;
   let quota = null;
 
   try {
-    metrics = tracker.getConversationMetrics(convId);
+    metrics = tracker.getConversationMetrics(convId, { strict: Boolean(convId) });
   } catch {
     // First invocation may have empty db
   }
@@ -114,10 +118,18 @@ async function main() {
     lines.push(`• Model: ${metrics.model.displayName} (${metrics.contextWindow.maxTokensFormatted} max context)`);
     lines.push(`• Context Usage: ${metrics.contextWindow.currentTokensFormatted} tokens (${metrics.contextWindow.percentUsed}%)`);
     lines.push(`• Cache Efficiency: ${metrics.cache.hitRatioPercent}% hit ratio (${metrics.cache.cachedTokensFormatted} cached / ${metrics.cache.uncachedTokensFormatted} uncached)`);
-    if (metrics.compaction.isNearCompaction) {
-      lines.push(`• ⚠️ Compaction Alert: ${metrics.compaction.trajectoryKb} KB trajectory (Compaction threshold: ${metrics.compaction.thresholdKb} KB, ${metrics.compaction.kbRemaining} KB remaining)`);
+    const comp = metrics.compaction;
+    const hasTokenHeadroom = Boolean(comp.tokensRemainingFormatted && comp.thresholdTokensFormatted);
+    if (comp.isNearCompaction) {
+      if (hasTokenHeadroom) {
+        lines.push(`• ⚠️ Compaction Alert: Active Context ${comp.activeTokensFormatted || "0"} / Trigger ${comp.thresholdTokensFormatted} (${comp.percentCompacted}%, ${comp.tokensRemainingFormatted} tokens / ~${comp.kbRemaining} KB remaining)`);
+      } else {
+        lines.push(`• ⚠️ Compaction Alert: Active Context ${comp.trajectoryKb} KB / Trigger ${comp.thresholdKb} KB (${comp.kbRemaining} KB remaining)`);
+      }
+    } else if (hasTokenHeadroom) {
+      lines.push(`• Compaction Headroom: ${comp.tokensRemainingFormatted} tokens (~${comp.kbRemaining} KB) remaining before automatic compaction (Trigger: ${comp.thresholdTokensFormatted})`);
     } else {
-      lines.push(`• Compaction Headroom: ${metrics.compaction.kbRemaining} KB remaining before automatic compaction`);
+      lines.push(`• Compaction Headroom: ${comp.kbRemaining} KB remaining before automatic compaction`);
     }
   }
 

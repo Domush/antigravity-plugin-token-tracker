@@ -13,9 +13,11 @@
     "lib",
     "hooks",
     "injector",
+    "mcp",
     "sidecars",
     "plugin.json",
     "hooks.json",
+    "mcp_config.json",
     "README.md",
     "LICENSE"
   ],

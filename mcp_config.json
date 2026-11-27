@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "token-tracker": {
+      "command": "node",
+      "args": ["./mcp/server.js"]
+    }
+  }
+}

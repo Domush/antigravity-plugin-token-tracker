@@ -16,6 +16,7 @@ import { runUninstall } from "../injector/uninstall.js";
 export const ESSENTIAL_FILES = [
   "plugin.json",
   "hooks.json",
+  "mcp_config.json",
   "package.json",
   "README.md",
   "LICENSE"
@@ -25,6 +26,7 @@ export const ESSENTIAL_DIRS = [
   "lib",
   "hooks",
   "injector",
+  "mcp",
   "sidecars"
 ];
 
@@ -44,6 +46,39 @@ export function resolveTargetDir({ workspace = false, cwd = process.cwd() } = {}
     throw new Error("Could not determine user home directory for global installation.");
   }
   return path.join(homeDir, ".gemini", "config", "plugins", "antigravity-plugin-token-tracker");
+}
+
+/**
+ * Returns fs.lstatSync result or null when the path does not exist (ENOENT).
+ * @param {string} targetPath
+ * @returns {fs.Stats|null}
+ */
+function lstatOrNull(targetPath) {
+  try {
+    return fs.lstatSync(targetPath);
+  } catch (err) {
+    if (err.code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Removes a symbolic link or Windows directory junction (active or broken)
+ * without touching the target directory's contents.
+ * @param {string} linkPath
+ */
+function removeSymlinkOrJunction(linkPath) {
+  try {
+    fs.unlinkSync(linkPath);
+  } catch (err) {
+    if (err.code === "EPERM" || err.code === "EISDIR") {
+      fs.rmdirSync(linkPath);
+    } else {
+      throw err;
+    }
+  }
 }
 
 /**
@@ -75,20 +110,48 @@ export function installPlugin({ sourceDir, targetDir }) {
     }
   }
 
-  // Ensure target directory exists
+  // Inspect target directory safely (handles active/broken symlinks and Windows junctions)
+  const targetStat = lstatOrNull(targetDir);
+  if (targetStat) {
+    if (targetStat.isSymbolicLink()) {
+      removeSymlinkOrJunction(targetDir);
+    } else if (!targetStat.isDirectory()) {
+      throw new Error(`Target installation path exists and is not a directory: ${targetDir}`);
+    } else {
+      const resolvedSource = fs.realpathSync(sourceDir);
+      const resolvedTarget = fs.realpathSync(targetDir);
+      const isSamePath =
+        process.platform === "win32"
+          ? resolvedSource.toLowerCase() === resolvedTarget.toLowerCase()
+          : resolvedSource === resolvedTarget;
+      if (isSamePath) {
+        throw new Error(`Target installation directory resolves to the same path as source: ${targetDir}`);
+      }
+    }
+  }
+
+  // Ensure target directory exists as a standard directory
   fs.mkdirSync(targetDir, { recursive: true });
 
-  // Copy files
+  // Copy files (removing any pre-existing symlink at destination first)
   for (const file of ESSENTIAL_FILES) {
     const src = path.join(sourceDir, file);
     const dest = path.join(targetDir, file);
+    const destStat = lstatOrNull(dest);
+    if (destStat && destStat.isSymbolicLink()) {
+      removeSymlinkOrJunction(dest);
+    }
     fs.copyFileSync(src, dest);
   }
 
-  // Copy directories recursively (clean overwrite)
+  // Copy directories recursively (removing any pre-existing symlink/junction at destination first)
   for (const dir of ESSENTIAL_DIRS) {
     const src = path.join(sourceDir, dir);
     const dest = path.join(targetDir, dir);
+    const destStat = lstatOrNull(dest);
+    if (destStat && destStat.isSymbolicLink()) {
+      removeSymlinkOrJunction(dest);
+    }
     fs.cpSync(src, dest, { recursive: true, force: true });
   }
 
@@ -106,11 +169,17 @@ export function uninstallPlugin({ targetDir }) {
     throw new Error("Target uninstallation directory must be specified.");
   }
 
-  if (fs.existsSync(targetDir)) {
-    fs.rmSync(targetDir, { recursive: true, force: true });
-    return { removed: true, targetDir };
+  const targetStat = lstatOrNull(targetDir);
+  if (!targetStat) {
+    return { removed: false, targetDir };
   }
-  return { removed: false, targetDir };
+
+  if (targetStat.isSymbolicLink()) {
+    removeSymlinkOrJunction(targetDir);
+  } else {
+    fs.rmSync(targetDir, { recursive: true, force: true });
+  }
+  return { removed: true, targetDir };
 }
 
 /**

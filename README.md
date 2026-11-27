@@ -8,21 +8,21 @@ Production-grade Hybrid Token Tracker plugin for Antigravity providing real-time
 
 1. **Context Window Tracking**:
    - Real-time active tokens, maximum context window tokens, and percentage utilization.
-   - Comprehensive model catalog covering Gemini (1M/2M context), Claude 3.5/3.7 Sonnet (200k), GPT-4o (128k), and reasoning models.
+   - Comprehensive model catalog covering Gemini 4, Gemini 3.x, and Gemini 2.5 (1M/2M context), Claude 5.5 and 4.x (200k/1M context), OpenAI GPT-5, GPT-4.1, o3/o4, and GPT-OSS, DeepSeek, and Grok.
 2. **Prompt Cache Efficiency**:
    - Accurate tracking of cached prompt tokens vs. newly computed tokens.
    - Cache hit ratio percentage reflecting prefix caching gains.
 3. **Context Compaction Headroom**:
-   - Tracks cumulative trajectory byte volume from conversation SQLite tables.
-   - Calculates exact KB remaining until automatic compaction is triggered (~180 KB standard trigger threshold).
-   - Generates proactive compaction advisory warnings when headroom drops below 35 KB.
+   - Tracks active prompt context size relative to each model's context window capacity.
+   - Calculates remaining tokens and KB headroom until automatic compaction is triggered (~80% of the active model's context window).
+   - Generates proactive compaction advisory warnings as active context approaches the compaction trigger.
 4. **Language Server Connect-RPC Quota Telemetry**:
    - Direct integration with local Language Server `RetrieveUserQuotaSummary` RPC over HTTP.
    - Auto-discovers active port and `x-codeium-csrf-token` from environment, daemon manifests (`~/.gemini/antigravity/daemon/hub_*.json`), and server logs.
    - Live 5-Hour and Weekly limits with human-readable reset countdowns (e.g. `1h 25m`, `5d 14h`) for both Gemini Models and Claude/GPT 3P models.
 5. **Synchronized Dual Interface**:
    - **In-Input-Box Status Pill**: Injected directly into `#antigravity.agentSidePanelInputBox` to the left of the `Turbo ∨` Local Permissions selector. Displays live pill summary with color-coded status dot and interactive hover/click telemetry popover card.
-   - **Native Aux Pane Sidecar Web UI**: Official `SIDECAR_UI_ENTRYPOINT_AUX_PANE` dashboard in `sidecars/dashboard/` rendering animated radial SVG rings and progress gauges with dark/light Antigravity theme synchronization.
+   - **Native Aux Pane Sidecar Web UI**: Official `SIDECAR_UI_ENTRYPOINT_AUX_PANE` dashboard in `sidecars/dashboard/` displaying a compact 4-across quota strip (`Gemini 5-Hour`, `Gemini Weekly`, `Claude/GPT 5-Hour`, `Claude/GPT Weekly`), a live Active Agents tree grouping active main sessions and currently running subagents with circular SVG rings and compact metrics, dark/light Antigravity theme synchronization, and a toggle between text and ring views for active subagents.
 
 ---
 
@@ -35,14 +35,26 @@ antigravity-plugin-token-tracker/
 ├── package.json                   # Manifest & npm lifecycle scripts
 ├── plugin.json                    # Antigravity plugin descriptor
 ├── hooks.json                     # SessionStart & PreInvocation hook declarations
+├── mcp_config.json                # On-demand Token Tracker status tool registration
 ├── hooks/
 │   ├── session-start.js           # SessionStart hook recording active conversation
 │   └── pre-invocation.js          # PreInvocation hook injecting compaction warnings
 ├── lib/
-│   ├── models.js                  # Model catalog & context window sizing
+│   ├── model-catalog.js           # Immutable model context window catalog
+│   ├── model-detector.js          # Binary & text model identifier extraction
+│   ├── models.js                  # Model normalization & context window sizing
+│   ├── compaction.js              # Active-context compaction threshold & headroom calculations
+│   ├── ls-rpc.js                  # Loopback Connect-RPC HTTP transport helper
 │   ├── quota-service.js           # Connect-RPC client for RetrieveUserQuotaSummary
 │   ├── conversation-tracker.js    # Read-only SQLite parser for conversation telemetry
+│   ├── subagent-tracker.js        # Child subagent discovery & context telemetry reader
+│   ├── active-status.js           # Live active vs. idle session & path confinement helpers
+│   ├── agent-tree.js              # Active main & subagent tree discovery
 │   └── telemetry-server.js        # Loopback HTTP server (127.0.0.1:8976)
+├── mcp/
+│   ├── server.js                  # On-demand status tool server for Antigravity agents
+│   ├── status-tool.js             # Status tool schema, validation, and handler
+│   └── format.js                  # Markdown & JSON status output formatters
 ├── injector/
 │   ├── status-bar.js              # Vanilla JS widget mounting to #antigravity.agentSidePanelInputBox
 │   ├── install.js                 # Safe, non-destructive installer with backup & rollback
@@ -51,7 +63,9 @@ antigravity-plugin-token-tracker/
 │   └── dashboard/
 │       ├── sidecar.json           # Native Aux Pane sidecar descriptor
 │       ├── server.mjs             # sidecar_sdk server with standalone fallback
-│       └── index.html             # Responsive dashboard with SVG radial rings
+│       ├── index.html             # Dense compact tree dashboard structure
+│       ├── styles.css             # Theme-aware compact tree & quota strip styles
+│       └── app.js                 # Live telemetry polling & DOM tree renderer
 ├── scripts/
 │   └── audit-gate.js              # Deterministic P0 static audit gate
 └── tests/
@@ -63,6 +77,8 @@ antigravity-plugin-token-tracker/
 ## Quick Install (npx)
 
 Install the plugin directly into Google Antigravity using `npx`:
+
+> **Note:** Antigravity requires a standard copied plugin directory rather than a symlink or Windows junction. Run the `npx` install command below to deploy a clean copy into your plugins folder.
 
 ```bash
 # Install plugin into Antigravity plugins directory (~/.gemini/config/plugins/)
@@ -135,6 +151,14 @@ Endpoints:
 - `GET /api/telemetry?conversationId=<id>`: Consolidated live metrics.
 - `GET /api/refresh`: Forces instant re-fetch from Connect-RPC and SQLite.
 - `GET /api/health`: Health status, PID, and uptime.
+
+### 4. On-Demand Agent Status & Subagent Monitoring
+
+Antigravity Token Tracker includes a built-in status tool (`token_tracker_status`) registered automatically through `mcp_config.json`, allowing agents to check live telemetry whenever needed without extra prompt overhead:
+
+- **Live Context & Cache Snapshot**: Inspect active model capacity, context usage, prompt cache hit efficiency, and compaction headroom on demand.
+- **Subagent Visibility**: Monitor token usage, cache efficiency, and active status across child subagents spawned during a session.
+- **Optional Quota Check**: Retrieve current 5-hour and weekly quota levels alongside conversation telemetry in either concise Markdown or structured JSON.
 
 ---
 

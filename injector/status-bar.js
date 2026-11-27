@@ -231,6 +231,14 @@
     const ctxFillClass = contextWindow.percentUsed > 85 ? "alert" : contextWindow.percentUsed > 60 ? "warn" : "";
     const compFillClass = compaction.isNearCompaction ? "alert" : compaction.percentCompacted > 60 ? "warn" : "";
 
+    const hasTokenHeadroom = Boolean(compaction.tokensRemainingFormatted && compaction.thresholdTokensFormatted);
+    const compactionHeadroomText = hasTokenHeadroom
+      ? `${compaction.tokensRemainingFormatted} tokens left`
+      : `${compaction.kbRemaining} KB left`;
+    const compactionSubText = hasTokenHeadroom
+      ? `Active: ${compaction.activeTokensFormatted || "0"} / Trigger: ${compaction.thresholdTokensFormatted} (~${compaction.trajectoryKb} / ${compaction.thresholdKb} KB)`
+      : `Active: ${compaction.trajectoryKb} KB / Trigger: ${compaction.thresholdKb} KB`;
+
     popover.innerHTML = `
       <div class="tt-header">
         <span class="tt-title">⚡ Token Tracker Telemetry</span>
@@ -264,13 +272,12 @@
         <div class="tt-row">
           <span class="tt-label">Auto-Compaction Headroom</span>
           <span class="tt-val" style="color: ${compaction.isNearCompaction ? '#f87171' : '#e4e4e7'};">
-            ${compaction.kbRemaining} KB left
+            ${compactionHeadroomText}
           </span>
         </div>
         <div class="tt-bar-bg"><div class="tt-bar-fill ${compFillClass}" style="width: ${Math.min(100, compaction.percentCompacted)}%;"></div></div>
         <div class="tt-row" style="margin-top: 3px; font-size: 10px; color: #a1a1aa;">
-          <span>Trajectory: ${compaction.trajectoryKb} KB</span>
-          <span>Threshold: ${compaction.thresholdKb} KB</span>
+          <span>${compactionSubText}</span>
         </div>
       </div>
 
@@ -343,7 +350,7 @@
     if (!inputBox) return;
 
     const pill = getOrCreatePill();
-    if (pill.parentElement && pill.parentElement.contains(pill)) {
+    if (pill.isConnected && inputBox.contains(pill)) {
       return; // Already attached
     }
 
