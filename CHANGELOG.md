@@ -2,6 +2,11 @@
 
 All notable changes to `antigravity-plugin-token-tracker` will be documented in this file.
 
+## [1.1.2] - 2026-11-27
+
+### Added
+- **Package Provenance & Runtime Alignment**: Aligned package and plugin manifest metadata with repository provenance, issue tracker, homepage links, and Node.js 22+ runtime compatibility.
+
 ## [1.1.1] - 2026-11-27
 
 ### Added

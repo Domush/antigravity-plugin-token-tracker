@@ -2,8 +2,13 @@
   "name": "token-tracker",
   "displayName": "Token Tracker",
   "description": "Hybrid telemetry tracker for Antigravity: context window usage, prompt caching efficiency, context compaction countdown, and 5h/weekly quota monitoring.",
-  "version": "1.1.1",
-  "author": "Antigravity Autonomous Team",
+  "version": "1.1.2",
+  "author": "Phillip Webber <github@webbsense.com>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Domush/antigravity-plugin-token-tracker.git"
+  },
+  "homepage": "https://github.com/Domush/antigravity-plugin-token-tracker#readme",
   "logo": "assets/icon.svg",
   "suggestedPrompts": [
     "Show active conversation token usage and cache hit ratio",

@@ -1,13 +1,48 @@
 {
   "name": "antigravity-plugin-token-tracker",
-  "displayName": "Token Tracker",
-  "version": "1.1.1",
+  "displayName": "Token Tracker: A plugin for Google Antigravity App",
+  "version": "1.1.2",
   "description": "Token Tracker plugin for Antigravity: real-time context window monitoring, prompt cache hit ratios, compaction countdowns, and Language Server quota telemetry via status-bar pill and native Aux Pane dashboard.",
   "type": "module",
-  "main": "lib/telemetry-server.js",
+  "license": "MIT",
+  "author": "Phillip Webber <github@webbsense.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Domush/antigravity-plugin-token-tracker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Domush/antigravity-plugin-token-tracker/issues"
+  },
+  "homepage": "https://github.com/Domush/antigravity-plugin-token-tracker#readme",
+  "keywords": [
+    "antigravity",
+    "antigravity-plugin",
+    "gemini",
+    "token-tracker",
+    "prompt-cache",
+    "context-window",
+    "compaction",
+    "mcp",
+    "model-context-protocol",
+    "lifecycle-hooks",
+    "sidecar",
+    "telemetry"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "test": "node tests/run-all.js",
+    "audit-gate": "node scripts/audit-gate.js",
+    "install-injector": "node injector/install.js",
+    "uninstall-injector": "node injector/uninstall.js",
+    "start-telemetry": "node lib/telemetry-server.js --start",
+    "sidecar": "node sidecars/dashboard/server.mjs"
+  },
   "bin": {
     "antigravity-plugin-token-tracker": "bin/cli.js"
   },
+  "main": "./lib/telemetry-server.js",
   "files": [
     "assets",
     "bin",
@@ -19,29 +54,11 @@
     "plugin.json",
     "hooks.json",
     "mcp_config.json",
-    "CHANGELOG.md",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
-  "scripts": {
-    "test": "node tests/run-all.js",
-    "audit-gate": "node scripts/audit-gate.js",
-    "install-injector": "node injector/install.js",
-    "uninstall-injector": "node injector/uninstall.js",
-    "start-telemetry": "node lib/telemetry-server.js --start",
-    "sidecar": "node sidecars/dashboard/server.mjs"
-  },
-  "keywords": [
-    "antigravity",
-    "token-tracker",
-    "prompt-cache",
-    "context-window",
-    "sidecar",
-    "telemetry"
-  ],
-  "author": "Antigravity Autonomous Team",
-  "license": "MIT",
-  "engines": {
-    "node": ">=20.0.0"
+  "publishConfig": {
+    "access": "public"
   }
 }

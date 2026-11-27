@@ -56,7 +56,7 @@ npx antigravity-plugin-token-tracker uninstall
 | `npx antigravity-plugin-token-tracker install-injector` | Patches Electron `app.asar` to enable the status-bar pill |
 | `npx antigravity-plugin-token-tracker install-injector --dry-run` | Validates ASAR patching integrity without mutating files |
 | `npx antigravity-plugin-token-tracker uninstall-injector` | Restores pristine `app.asar` from backup and unlinks script |
-| `npx antigravity-plugin-token-tracker --version` | Displays current version (`v1.1.1`) |
+| `npx antigravity-plugin-token-tracker --version` | Displays current version (`v1.1.2`) |
 | `npx antigravity-plugin-token-tracker --help` | Displays CLI usage instructions and options |
 
 ---

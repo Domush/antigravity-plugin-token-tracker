@@ -54,7 +54,7 @@ export function loadPackageVersion(rootDir) {
   } catch (err) {
     console.error(`[TokenTracker MCP] Failed to read package.json version: ${err.message}`);
   }
-  return "1.1.1";
+  return "1.1.2";
 }
 
 /**

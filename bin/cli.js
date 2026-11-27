@@ -206,7 +206,7 @@ export function getPackageVersion(rootDir) {
   } catch (err) {
     console.debug("[CLI] Unable to read package.json version:", err.message);
   }
-  return "1.1.1";
+  return "1.1.2";
 }
 
 /**
