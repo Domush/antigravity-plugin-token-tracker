@@ -10,7 +10,7 @@ jobs:
   publish-to-npm:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - name: Checkout repository
@@ -32,3 +32,26 @@ jobs:
 
       - name: Publish to npm
         run: npm publish --access public --provenance
+
+      - name: Extract Release Notes from CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          node -e '
+            const fs = require("fs");
+            const version = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+            const changelog = fs.readFileSync("CHANGELOG.md", "utf8");
+            const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const match = changelog.match(new RegExp(`^## \\[${escaped}\\][^\\r\\n]*\\r?\\n([\\s\\S]*?)(?=\\r?\\n## \\[|(?![\\s\\S]))`, "m"));
+            if (!match || !match[1].trim()) {
+              console.error(`Error: No CHANGELOG.md entry found for version ${version}`);
+              process.exit(1);
+            }
+            fs.writeFileSync("release_notes.md", match[1].trim() + "\n", "utf8");
+          '
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          name: ${{ github.ref_name }}
+          body_path: release_notes.md

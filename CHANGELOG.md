@@ -2,6 +2,11 @@
 
 All notable changes to `antigravity-plugin-token-tracker` will be documented in this file.
 
+## [1.1.3] - 2026-11-27
+
+### Improved
+- **Automated Release Notes**: Updated the GitHub Actions release workflow to automatically extract and publish the matching `CHANGELOG.md` entry for each tagged release.
+
 ## [1.1.2] - 2026-11-27
 
 ### Added

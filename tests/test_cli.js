@@ -157,7 +157,8 @@ export async function runCliTests() {
 
   // 3. Package Version Extraction & Malformed Fallback
   test("cli: getPackageVersion extracts version and falls back to 1.1.2 on missing or malformed package.json", () => {
-    assert.strictEqual(getPackageVersion(rootDir), "1.1.2");
+    const pkgVersion = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8")).version;
+    assert.strictEqual(getPackageVersion(rootDir), pkgVersion);
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ag-tt-pkg-"));
     try {
       const emptyDir = path.join(tempDir, "empty");
@@ -191,10 +192,11 @@ export async function runCliTests() {
 
   // 5. CLI Process Invocation: --version and -v
   test("cli: process invocation for --version and -v exits with code 0", () => {
+    const pkgVersion = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8")).version;
     for (const flag of ["--version", "-v"]) {
       const res = spawnSync(process.execPath, [cliPath, flag], { encoding: "utf8" });
       assert.strictEqual(res.status, 0);
-      assert.strictEqual(res.stdout.trim(), "antigravity-plugin-token-tracker v1.1.2");
+      assert.strictEqual(res.stdout.trim(), `antigravity-plugin-token-tracker v${pkgVersion}`);
     }
   });
 
