@@ -7,9 +7,14 @@
  * - telemetry server (test_telemetry_server.js)
  * - injector & ASAR offsets (test_injector_offset.js)
  * - hooks isolation
+ * - unified CLI (test_cli.js)
+ * - live hook usage & offline fallback (test_hooks_live_usage.js)
+ * - active agent tree ordering & idle grace (test_agent_tree.js)
  */
 
 import assert from "node:assert";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -19,6 +24,8 @@ import { runConversationTrackerTests } from "./test_conversation_tracker.js";
 import { runTelemetryServerTests } from "./test_telemetry_server.js";
 import { runInjectorOffsetTests } from "./test_injector_offset.js";
 import { runCliTests } from "./test_cli.js";
+import { runHooksLiveUsageTests } from "./test_hooks_live_usage.js";
+import { runAgentTreeTests } from "./test_agent_tree.js";
 
 /**
  * Executes the complete test matrix.
@@ -126,13 +133,28 @@ export async function runAllTests() {
     }, TypeError);
     assert.strictEqual(pModule.ADVISORY_COOLDOWN_MS, 120000);
 
-    const hookOutput = execFileSync(process.execPath, [path.resolve("hooks/pre-invocation.js")], {
-      input: JSON.stringify({ conversationId: "test-non-existent-session-for-hook" }),
-      encoding: "utf8"
-    });
-    const parsedHook = JSON.parse(hookOutput.trim());
-    assert.strictEqual(typeof parsedHook, "object");
-    assert.strictEqual(parsedHook !== null, true);
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "tt-hook-cli-"));
+    try {
+      const hookOutput = execFileSync(process.execPath, [path.resolve("hooks/pre-invocation.js")], {
+        input: JSON.stringify({ conversationId: "test-non-existent-session-for-hook" }),
+        encoding: "utf8",
+        env: { ...process.env, HOME: tmpHome, USERPROFILE: tmpHome }
+      });
+      const parsedHook = JSON.parse(hookOutput.trim());
+      assert.deepStrictEqual(parsedHook, {});
+      const isolatedActivePath = path.join(
+        tmpHome,
+        ".gemini",
+        "antigravity",
+        "plugin_data",
+        "token-tracker",
+        "active_conversation.json"
+      );
+      const isolatedActive = JSON.parse(fs.readFileSync(isolatedActivePath, "utf8"));
+      assert.strictEqual(isolatedActive.conversationId, "test-non-existent-session-for-hook");
+    } finally {
+      fs.rmSync(tmpHome, { recursive: true, force: true });
+    }
     console.log("  [PASS] hooks: pre-invocation module imports safely and executes CLI lifecycle contract");
     hookPassed++;
   } catch (err) {
@@ -152,6 +174,30 @@ export async function runAllTests() {
   } catch (err) {
     console.error(`[CRITICAL] CLI suite crashed: ${err.message}`);
     suiteResults.push({ name: "Unified CLI", passed: 0, failed: 1 });
+    totalFailed++;
+  }
+
+  // Suite 8: Live Hook Usage & Offline Fallback
+  try {
+    const res = await runHooksLiveUsageTests();
+    suiteResults.push({ name: "Hooks Live Usage", ...res });
+    totalPassed += res.passed;
+    totalFailed += res.failed;
+  } catch (err) {
+    console.error(`[CRITICAL] Hooks Live Usage suite crashed: ${err.message}`);
+    suiteResults.push({ name: "Hooks Live Usage", passed: 0, failed: 1 });
+    totalFailed++;
+  }
+
+  // Suite 9: Active Agent Tree Ordering & Idle Grace
+  try {
+    const res = await runAgentTreeTests();
+    suiteResults.push({ name: "Agent Tree", ...res });
+    totalPassed += res.passed;
+    totalFailed += res.failed;
+  } catch (err) {
+    console.error(`[CRITICAL] Agent Tree suite crashed: ${err.message}`);
+    suiteResults.push({ name: "Agent Tree", passed: 0, failed: 1 });
     totalFailed++;
   }
 

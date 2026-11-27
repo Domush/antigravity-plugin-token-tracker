@@ -79,12 +79,14 @@ function getPackageVersion() {
     const pkgPath = path.join(__dirname, "../../package.json");
     if (fs.existsSync(pkgPath)) {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-      return pkg.version || "1.1.0";
+      if (typeof pkg?.version === "string" && pkg.version.trim()) {
+        return pkg.version.trim();
+      }
     }
-  } catch {
-    // Non-fatal package read
+  } catch (err) {
+    console.debug("[TokenTracker Sidecar] Unable to read package.json version:", err?.message || String(err));
   }
-  return "1.1.0";
+  return "1.1.1";
 }
 
 function getRenderedHtml() {
@@ -122,8 +124,8 @@ try {
     const sdkModule = await import("sidecar_sdk");
     SidecarApp = sdkModule.SidecarApp;
     SidecarResponse = sdkModule.Response || null;
-  } catch {
-    // Standalone fallback
+  } catch (err) {
+    console.debug("[TokenTracker Sidecar] sidecar_sdk unavailable, using standalone mode:", err?.message || String(err));
   }
 }
 

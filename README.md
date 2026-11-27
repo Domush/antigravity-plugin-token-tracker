@@ -56,7 +56,7 @@ npx antigravity-plugin-token-tracker uninstall
 | `npx antigravity-plugin-token-tracker install-injector` | Patches Electron `app.asar` to enable the status-bar pill |
 | `npx antigravity-plugin-token-tracker install-injector --dry-run` | Validates ASAR patching integrity without mutating files |
 | `npx antigravity-plugin-token-tracker uninstall-injector` | Restores pristine `app.asar` from backup and unlinks script |
-| `npx antigravity-plugin-token-tracker --version` | Displays current version (`v1.1.0`) |
+| `npx antigravity-plugin-token-tracker --version` | Displays current version (`v1.1.1`) |
 | `npx antigravity-plugin-token-tracker --help` | Displays CLI usage instructions and options |
 
 ---
@@ -85,8 +85,8 @@ antigravity-plugin-token-tracker/
 ├── hooks.json                     # SessionStart & PreInvocation hook declarations
 ├── mcp_config.json                # On-demand Token Tracker status tool registration
 ├── hooks/
-│   ├── session-start.js           # SessionStart hook recording active conversation
-│   └── pre-invocation.js          # PreInvocation hook injecting compaction warnings
+│   ├── session-start.js           # SessionStart hook reporting live context, cache & quota status
+│   └── pre-invocation.js          # PreInvocation hook injecting live context & compaction advisories
 ├── lib/
 │   ├── model-catalog.js           # Immutable model context window catalog
 │   ├── model-detector.js          # Binary & text model identifier extraction

@@ -12,6 +12,7 @@ import http from "node:http";
 import { fileURLToPath } from "node:url";
 import { ConversationTracker, resolveSessionId, isSubagentPayload } from "../lib/conversation-tracker.js";
 import { QuotaService } from "../lib/quota-service.js";
+import { applyModelUsageMetrics } from "../lib/compaction.js";
 
 export { resolveSessionId, isSubagentPayload };
 
@@ -57,27 +58,30 @@ function notifyTelemetryServer(port, conversationId) {
   req.end();
 }
 
-async function main() {
-  const rawInput = await readStdin();
-  let payload = {};
-  try {
-    if (rawInput && rawInput.trim()) {
-      payload = JSON.parse(rawInput);
-    }
-  } catch {
-    // Fallback to empty payload
-  }
-
-  const tracker = new ConversationTracker();
-  const quotaService = new QuotaService();
-  const rawConvId = resolveSessionId(payload);
+/**
+ * Evaluates a SessionStart hook payload with injectable dependencies,
+ * enriching SQLite conversation telemetry with live Language Server `modelUsage`
+ * in parallel with quota retrieval.
+ * @param {Object} [options]
+ * @param {Object} [options.payload={}]
+ * @param {ConversationTracker} [options.tracker]
+ * @param {QuotaService} [options.quotaService]
+ * @param {string|null} [options.dataDir]
+ * @returns {Promise<Object>}
+ */
+export async function runSessionStart({
+  payload = {},
+  tracker = new ConversationTracker(),
+  quotaService = new QuotaService(),
+  dataDir = path.join(os.homedir(), ".gemini", "antigravity", "plugin_data", "token-tracker")
+} = {}) {
+  const safePayload = payload && typeof payload === "object" ? payload : {};
+  const rawConvId = resolveSessionId(safePayload);
   const convId = typeof rawConvId === "string" && rawConvId.trim() ? rawConvId.trim() : null;
-  const isSubagent = isSubagentPayload(payload, convId);
+  const isSubagent = isSubagentPayload(safePayload, convId);
 
   // Record active conversation in plugin data directory (skip for background subagents)
-  if (!isSubagent && convId) {
-    const home = os.homedir();
-    const dataDir = path.join(home, ".gemini", "antigravity", "plugin_data", "token-tracker");
+  if (!isSubagent && convId && dataDir) {
     try {
       if (!fs.existsSync(dataDir)) {
         fs.mkdirSync(dataDir, { recursive: true });
@@ -99,18 +103,23 @@ async function main() {
   }
 
   let metrics = null;
-  let quota = null;
-
   try {
     metrics = tracker.getConversationMetrics(convId, { strict: Boolean(convId) });
   } catch {
     // First invocation may have empty db
   }
 
-  try {
-    quota = await quotaService.getQuotaSummary(false);
-  } catch {
-    // Language server may be initializing
+  const quotaPromise = typeof quotaService?.getQuotaSummary === "function"
+    ? quotaService.getQuotaSummary(false).catch(() => null)
+    : Promise.resolve(null);
+  const mainUsagePromise =
+    metrics?.conversationId && typeof quotaService?.getCascadeUsage === "function"
+      ? quotaService.getCascadeUsage(metrics.conversationId, metrics.stepCount, false).catch(() => null)
+      : Promise.resolve(null);
+
+  const [quota, mainUsage] = await Promise.all([quotaPromise, mainUsagePromise]);
+  if (metrics && mainUsage) {
+    metrics = applyModelUsageMetrics(metrics, mainUsage, tracker?.compactionThresholdBytes ?? null);
   }
 
   const lines = ["[token-tracker active]"];
@@ -139,7 +148,7 @@ async function main() {
     lines.push(`• Gemini Quotas: 5h limit ${g5h.remainingPercent}% (resets ${g5h.countdown}), Weekly ${gWk.remainingPercent}% (resets ${gWk.countdown})`);
   }
 
-  const response = {
+  return {
     injectSteps: [
       {
         systemMessage: {
@@ -148,7 +157,20 @@ async function main() {
       }
     ]
   };
+}
 
+async function main() {
+  const rawInput = await readStdin();
+  let payload = {};
+  try {
+    if (rawInput && rawInput.trim()) {
+      payload = JSON.parse(rawInput);
+    }
+  } catch {
+    // Fallback to empty payload
+  }
+
+  const response = await runSessionStart({ payload });
   process.stdout.write(JSON.stringify(response) + "\n");
 }
 

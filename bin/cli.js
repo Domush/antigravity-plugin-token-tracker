@@ -199,12 +199,14 @@ export function getPackageVersion(rootDir) {
     const pkgPath = path.join(rootDir, "package.json");
     if (fs.existsSync(pkgPath)) {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-      if (pkg.version) return pkg.version;
+      if (typeof pkg?.version === "string" && pkg.version.trim()) {
+        return pkg.version.trim();
+      }
     }
   } catch (err) {
     console.debug("[CLI] Unable to read package.json version:", err.message);
   }
-  return "1.1.0";
+  return "1.1.1";
 }
 
 /**

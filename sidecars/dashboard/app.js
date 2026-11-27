@@ -50,13 +50,13 @@ function renderAgentTree(agentTree) {
   const subCount = typeof agentTree?.subagentCount === "number"
     ? agentTree.subagentCount
     : roots.reduce((sum, root) => {
-        const activeKids = Array.isArray(root.children)
-          ? root.children.filter((child) => child && child.isActive)
+        const visibleKids = Array.isArray(root.children)
+          ? root.children.filter(Boolean)
           : [];
-        return sum + activeKids.length;
+        return sum + visibleKids.length;
       }, 0);
 
-  countsEl.textContent = `${mainCount} Main · ${subCount} Active Subagents`;
+  countsEl.textContent = `${mainCount} Main · ${subCount} Subagents`;
   container.replaceChildren();
 
   if (roots.length === 0) {
@@ -72,14 +72,14 @@ function renderAgentTree(agentTree) {
     group.className = "tree-group";
     group.appendChild(buildMainCard(root));
 
-    const activeChildren = Array.isArray(root.children)
-      ? root.children.filter((child) => child && child.isActive)
+    const visibleChildren = Array.isArray(root.children)
+      ? root.children.filter(Boolean)
       : [];
 
-    if (activeChildren.length > 0) {
+    if (visibleChildren.length > 0) {
       const branch = document.createElement("div");
       branch.className = "sub-branch";
-      for (const sub of activeChildren) {
+      for (const sub of visibleChildren) {
         branch.appendChild(buildSubagentCard(sub, subagentDisplayMode));
       }
       group.appendChild(branch);

@@ -12,6 +12,10 @@ import os from "node:os";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { ConversationTracker, resolveSessionId, isSubagentPayload } from "../lib/conversation-tracker.js";
+import { QuotaService } from "../lib/quota-service.js";
+import { applyModelUsageMetrics } from "../lib/compaction.js";
+
+export { resolveSessionId, isSubagentPayload };
 
 export const ADVISORY_COOLDOWN_MS = 120000;
 export const MIN_PERCENT_DELTA = 5;
@@ -137,37 +141,48 @@ function readStdin() {
   });
 }
 
-async function main() {
-  const rawInput = await readStdin();
-  let payload = {};
-  try {
-    if (rawInput && rawInput.trim()) {
-      payload = JSON.parse(rawInput);
-    }
-  } catch {
-    // Non-fatal parse error
-  }
-
-  const rawConvId = resolveSessionId(payload);
+/**
+ * Evaluates a PreInvocation hook payload with injectable dependencies,
+ * enriching SQLite conversation telemetry with live Language Server `modelUsage`
+ * and returning any compaction advisory injection response.
+ * @param {Object} [options]
+ * @param {Object} [options.payload={}]
+ * @param {ConversationTracker} [options.tracker]
+ * @param {QuotaService} [options.quotaService]
+ * @param {string|null} [options.dataDir]
+ * @param {number} [options.nowMs=Date.now()]
+ * @returns {Promise<Object>}
+ */
+export async function runPreInvocation({
+  payload = {},
+  tracker = new ConversationTracker(),
+  quotaService = new QuotaService(),
+  dataDir = path.join(os.homedir(), ".gemini", "antigravity", "plugin_data", "token-tracker"),
+  nowMs = Date.now()
+} = {}) {
+  const safePayload = payload && typeof payload === "object" ? payload : {};
+  const rawConvId = resolveSessionId(safePayload);
   const convId = typeof rawConvId === "string" && rawConvId.trim() ? rawConvId.trim() : null;
-  const isSubagent = isSubagentPayload(payload, convId);
-  const home = os.homedir();
-  const dataDir = path.join(home, ".gemini", "antigravity", "plugin_data", "token-tracker");
+  const isSubagent = isSubagentPayload(safePayload, convId);
+  const currentNow = typeof nowMs === "number" && Number.isFinite(nowMs) ? nowMs : Date.now();
 
   // Keep active conversation state updated (skip for background subagents)
-  if (!isSubagent && convId) {
+  if (!isSubagent && convId && dataDir) {
     try {
       if (!fs.existsSync(dataDir)) {
         fs.mkdirSync(dataDir, { recursive: true });
       }
       const stateFile = path.join(dataDir, "active_conversation.json");
-      fs.writeFileSync(stateFile, JSON.stringify({ conversationId: convId, updatedAt: new Date().toISOString() }, null, 2), "utf8");
+      fs.writeFileSync(
+        stateFile,
+        JSON.stringify({ conversationId: convId, updatedAt: new Date(currentNow).toISOString() }, null, 2),
+        "utf8"
+      );
     } catch {
       // Non-fatal filesystem recording error
     }
   }
 
-  const tracker = new ConversationTracker();
   let metrics = null;
   try {
     metrics = tracker.getConversationMetrics(convId, { strict: Boolean(convId) });
@@ -175,14 +190,25 @@ async function main() {
     // If conversation cannot be queried yet, proceed without injection
   }
 
+  if (metrics && metrics.conversationId && typeof quotaService?.getCascadeUsage === "function") {
+    try {
+      const mainUsage = await quotaService.getCascadeUsage(metrics.conversationId, metrics.stepCount, false);
+      if (mainUsage) {
+        metrics = applyModelUsageMetrics(metrics, mainUsage, tracker?.compactionThresholdBytes ?? null);
+      }
+    } catch {
+      // Language Server offline or unavailable; fall back cleanly to SQLite metrics
+    }
+  }
+
   // Only inject warning if approaching compaction and not suppressed by cooldown/delta guard
   if (metrics) {
-    const advisoriesDir = path.join(dataDir, "advisories");
-    const advisoryConvId = convId || metrics.conversationId || "default";
-    const advisoryPath = resolveAdvisoryStatePath(advisoriesDir, advisoryConvId);
-    const prevState = readAdvisoryState(advisoryPath);
-    const { emit, nextState } = shouldEmitCompactionAdvisory(metrics, prevState, Date.now());
-    if (nextState) {
+    const advisoryPath = dataDir
+      ? resolveAdvisoryStatePath(path.join(dataDir, "advisories"), convId || metrics.conversationId || "default")
+      : null;
+    const prevState = advisoryPath ? readAdvisoryState(advisoryPath) : null;
+    const { emit, nextState } = shouldEmitCompactionAdvisory(metrics, prevState, currentNow);
+    if (nextState && advisoryPath) {
       writeAdvisoryState(advisoryPath, nextState);
     }
 
@@ -195,15 +221,22 @@ async function main() {
       const headroomSummary = hasTokenHeadroom
         ? `${comp.tokensRemainingFormatted} tokens (~${comp.kbRemaining} KB) remaining before automatic context compaction occurs.`
         : `~${comp.kbRemaining} KB remaining before automatic context compaction occurs.`;
+      const currentTokensFormatted = metrics.contextWindow?.currentTokensFormatted || "0";
+      const maxTokensFormatted = metrics.contextWindow?.maxTokensFormatted || "0";
+      const percentUsed = Number.isFinite(metrics.contextWindow?.percentUsed) ? metrics.contextWindow.percentUsed : 0;
+      const hitRatioPercent = Number.isFinite(metrics.cache?.hitRatioPercent) ? metrics.cache.hitRatioPercent : 0;
+      const cachedTokensFormatted = metrics.cache?.cachedTokensFormatted || "0";
+      const totalCacheTokensFormatted = metrics.cache?.totalTokensFormatted || currentTokensFormatted;
 
       const lines = [
         `[token-tracker compaction advisory]`,
+        `• Context Window: ${currentTokensFormatted} / ${maxTokensFormatted} (${percentUsed}%)`,
         `• ${activeSummary}`,
         `• Compaction Headroom: ${headroomSummary}`,
-        `• Prompt Cache: ${metrics.cache.hitRatioPercent}% hit ratio (${metrics.contextWindow.currentTokensFormatted} active tokens in context)`
+        `• Prompt Cache: ${hitRatioPercent}% hit ratio (${cachedTokensFormatted} cached / ${totalCacheTokensFormatted} total)`
       ];
 
-      const response = {
+      return {
         injectSteps: [
           {
             systemMessage: {
@@ -212,13 +245,26 @@ async function main() {
           }
         ]
       };
-      process.stdout.write(JSON.stringify(response) + "\n");
-      return;
     }
   }
 
   // No injection needed for normal turns
-  process.stdout.write(JSON.stringify({}) + "\n");
+  return {};
+}
+
+async function main() {
+  const rawInput = await readStdin();
+  let payload = {};
+  try {
+    if (rawInput && rawInput.trim()) {
+      payload = JSON.parse(rawInput);
+    }
+  } catch {
+    // Non-fatal parse error
+  }
+
+  const response = await runPreInvocation({ payload });
+  process.stdout.write(JSON.stringify(response) + "\n");
 }
 
 const isMain = Boolean(

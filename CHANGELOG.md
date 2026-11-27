@@ -2,6 +2,13 @@
 
 All notable changes to `antigravity-plugin-token-tracker` will be documented in this file.
 
+## [1.1.1] - 2026-11-27
+
+### Added
+- **Live Lifecycle Hook Telemetry**: Synchronizes session startup summaries and proactive pre-turn compaction advisories with live Language Server token usage, displaying total context window utilization alongside cached-to-total prompt cache efficiency.
+- **Resilient Model & Offline Cache Estimation**: Automatically enriches missing model metadata from live session telemetry when available and scans deeper into conversation history for accurate prompt cache ratios during offline operation.
+- **Stable Subagent Ordering & Idle Grace Window**: Keeps subagent cards in consistent alphabetical order during concurrent activity and retains recently completed subagents in an idle state for two minutes before clearing them from the active agents tree.
+
 ## [1.1.0] - 2026-11-26
 
 ### Added

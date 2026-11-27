@@ -346,7 +346,7 @@ export function runInstall({ overridePath = null, dryRun = false } = {}) {
       asarPath,
       backupPath: `${asarPath}.token_tracker_backup`,
       destScript,
-      version: "1.1.0"
+      version: "1.1.1"
     };
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf8");
   }

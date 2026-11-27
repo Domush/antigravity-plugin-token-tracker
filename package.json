@@ -1,7 +1,7 @@
 {
   "name": "antigravity-plugin-token-tracker",
   "displayName": "Token Tracker",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Token Tracker plugin for Antigravity: real-time context window monitoring, prompt cache hit ratios, compaction countdowns, and Language Server quota telemetry via status-bar pill and native Aux Pane dashboard.",
   "type": "module",
   "main": "lib/telemetry-server.js",
