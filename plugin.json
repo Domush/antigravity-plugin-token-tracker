@@ -1,9 +1,10 @@
 {
-  "name": "antigravity-plugin-token-tracker",
+  "name": "token-tracker",
   "displayName": "Token Tracker",
   "description": "Hybrid telemetry tracker for Antigravity: context window usage, prompt caching efficiency, context compaction countdown, and 5h/weekly quota monitoring.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Antigravity Autonomous Team",
+  "logo": "assets/icon.svg",
   "suggestedPrompts": [
     "Show active conversation token usage and cache hit ratio",
     "Check Language Server 5-hour and weekly quota remaining",

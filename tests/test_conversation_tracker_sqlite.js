@@ -100,7 +100,8 @@ export function registerConversationTrackerSqliteTests(test) {
       assert.strictEqual(corruptMetrics.stepCount, 0);
       assert.strictEqual(corruptMetrics.contextWindow.currentTokens, 0);
       assert.strictEqual(corruptMetrics.cache.hitRatio, 0);
-      assert.strictEqual(corruptMetrics.compaction.trajectoryBytes, fs.statSync(corruptDbPath).size);
+      assert.strictEqual(corruptMetrics.compaction.trajectoryBytes, 0);
+      assert.strictEqual(corruptMetrics.compaction.cumulativeHistoryBytes, fs.statSync(corruptDbPath).size);
 
       // Empty SQLite DB (no tables)
       const emptyDbPath = path.join(testDir, "empty.db");
@@ -118,14 +119,15 @@ export function registerConversationTrackerSqliteTests(test) {
       assert.strictEqual(emptyMetrics.contextWindow.percentUsed, 0);
       assert.strictEqual(emptyMetrics.cache.hitRatio, 0);
       assert.strictEqual(emptyMetrics.stepCount, 0);
-      assert.strictEqual(emptyMetrics.compaction.trajectoryBytes, fs.statSync(emptyDbPath).size);
+      assert.strictEqual(emptyMetrics.compaction.trajectoryBytes, 0);
+      assert.strictEqual(emptyMetrics.compaction.cumulativeHistoryBytes, fs.statSync(emptyDbPath).size);
 
       // Partial schema: gen_metadata only (no trajectory_metadata_blob, no steps table)
       const partialDbPath = path.join(testDir, "partial-gen.db");
+      const genPayload = Buffer.from("header claude-opus-5-5-1m " + "z".repeat(3975));
       const partialDb = new DatabaseSync(partialDbPath);
       try {
         partialDb.exec("CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);");
-        const genPayload = Buffer.from("header claude-opus-5-5-1m " + "z".repeat(3975));
         partialDb.prepare("INSERT INTO gen_metadata (idx, data) VALUES (1, ?)").run(genPayload);
       } finally {
         partialDb.close();
@@ -139,7 +141,8 @@ export function registerConversationTrackerSqliteTests(test) {
       assert.strictEqual(partialMetrics.model.maxTokens, 1000000);
       assert.strictEqual(partialMetrics.model.group, "thirdParty");
       assert.strictEqual(partialMetrics.stepCount, 0);
-      assert.strictEqual(partialMetrics.compaction.trajectoryBytes, partialSize);
+      assert.strictEqual(partialMetrics.compaction.trajectoryBytes, genPayload.length);
+      assert.strictEqual(partialMetrics.compaction.cumulativeHistoryBytes, partialSize);
     } finally {
       fs.rmSync(testDir, { recursive: true, force: true });
     }
@@ -192,12 +195,14 @@ export function registerConversationTrackerSqliteTests(test) {
       assert.strictEqual(metrics.cache.hitRatio, 0.5);
       assert.strictEqual(metrics.cache.hitRatioPercent, 50.0);
       assert.strictEqual(metrics.stepCount, 5);
-      assert.strictEqual(metrics.compaction.trajectoryBytes, 10240);
-      assert.strictEqual(metrics.compaction.trajectoryKb, 10.0);
+      assert.strictEqual(metrics.compaction.trajectoryBytes, 4000);
+      assert.strictEqual(metrics.compaction.trajectoryKb, 3.9);
+      assert.strictEqual(metrics.compaction.cumulativeHistoryBytes, 10240);
       assert.strictEqual(metrics.compaction.thresholdBytes, 184320);
       assert.strictEqual(metrics.compaction.thresholdKb, 180);
-      assert.strictEqual(metrics.compaction.kbRemaining, 170);
-      assert.strictEqual(metrics.compaction.percentCompacted, 6);
+      assert.strictEqual(metrics.compaction.bytesRemaining, 180320);
+      assert.strictEqual(metrics.compaction.kbRemaining, 176);
+      assert.strictEqual(metrics.compaction.percentCompacted, 2);
       assert.strictEqual(metrics.compaction.isNearCompaction, false);
     } finally {
       fs.rmSync(testDir, { recursive: true, force: true });
@@ -209,13 +214,19 @@ export function registerConversationTrackerSqliteTests(test) {
     const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "token-tracker-compaction-"));
 
     try {
-      function createTestDb(name, totalBytes) {
+      function createTestDb(name, contextBytes, stepBytes = contextBytes) {
         const dbPath = path.join(testDir, `${name}.db`);
         const db = new DatabaseSync(dbPath);
         try {
-          db.exec("CREATE TABLE steps (step_id TEXT PRIMARY KEY, metadata TEXT, step_payload TEXT, render_info TEXT, task_details TEXT);");
-          if (totalBytes > 0) {
-            db.prepare("INSERT INTO steps VALUES ('1', ?, '', '', '')").run("x".repeat(totalBytes));
+          db.exec(`
+            CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);
+            CREATE TABLE steps (step_id TEXT PRIMARY KEY, metadata TEXT, step_payload TEXT, render_info TEXT, task_details TEXT);
+          `);
+          if (contextBytes > 0) {
+            db.prepare("INSERT INTO gen_metadata VALUES (1, ?)").run(Buffer.alloc(contextBytes, 0x61));
+          }
+          if (stepBytes > 0) {
+            db.prepare("INSERT INTO steps VALUES ('1', ?, '', '', '')").run("x".repeat(stepBytes));
           }
         } finally {
           db.close();
@@ -231,6 +242,7 @@ export function registerConversationTrackerSqliteTests(test) {
       createTestDb("zero-bytes", 0);
       const mZero = tracker.getConversationMetrics("zero-bytes");
       assert.strictEqual(mZero.compaction.trajectoryBytes, 0);
+      assert.strictEqual(mZero.compaction.cumulativeHistoryBytes, 0);
       assert.strictEqual(mZero.compaction.kbRemaining, 180);
       assert.strictEqual(mZero.compaction.percentCompacted, 0);
       assert.strictEqual(mZero.compaction.isNearCompaction, false);
@@ -238,6 +250,7 @@ export function registerConversationTrackerSqliteTests(test) {
       createTestDb("exact-threshold", 184320);
       const mExact = tracker.getConversationMetrics("exact-threshold");
       assert.strictEqual(mExact.compaction.trajectoryBytes, 184320);
+      assert.strictEqual(mExact.compaction.cumulativeHistoryBytes, 184320);
       assert.strictEqual(mExact.compaction.kbRemaining, 0);
       assert.strictEqual(mExact.compaction.percentCompacted, 100);
       assert.strictEqual(mExact.compaction.isNearCompaction, true);
@@ -245,6 +258,7 @@ export function registerConversationTrackerSqliteTests(test) {
       createTestDb("overflow-bytes", 300000);
       const mOverflow = tracker.getConversationMetrics("overflow-bytes");
       assert.strictEqual(mOverflow.compaction.trajectoryBytes, 300000);
+      assert.strictEqual(mOverflow.compaction.cumulativeHistoryBytes, 300000);
       assert.strictEqual(mOverflow.compaction.kbRemaining, 0);
       assert.strictEqual(mOverflow.compaction.percentCompacted, 100);
       assert.strictEqual(mOverflow.compaction.isNearCompaction, true);
@@ -258,6 +272,13 @@ export function registerConversationTrackerSqliteTests(test) {
       const mNotNear = tracker.getConversationMetrics("not-quite-near");
       assert.strictEqual(mNotNear.compaction.kbRemaining, 40);
       assert.strictEqual(mNotNear.compaction.isNearCompaction, false);
+
+      createTestDb("history-vs-active", 10240, 300000);
+      const mSplit = tracker.getConversationMetrics("history-vs-active");
+      assert.strictEqual(mSplit.compaction.trajectoryBytes, 10240);
+      assert.strictEqual(mSplit.compaction.cumulativeHistoryBytes, 300000);
+      assert.strictEqual(mSplit.compaction.percentCompacted, 6);
+      assert.strictEqual(mSplit.compaction.isNearCompaction, false);
     } finally {
       fs.rmSync(testDir, { recursive: true, force: true });
     }

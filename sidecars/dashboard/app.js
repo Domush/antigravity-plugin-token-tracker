@@ -16,9 +16,9 @@ let pollTimerId = null;
 
 function readSubagentDisplayMode() {
   try {
-    return window.localStorage.getItem(SUBAGENT_MODE_STORAGE_KEY) === "graphic" ? "graphic" : "text";
+    return window.localStorage.getItem(SUBAGENT_MODE_STORAGE_KEY) === "text" ? "text" : "graphic";
   } catch {
-    return "text";
+    return "graphic";
   }
 }
 
@@ -89,7 +89,7 @@ function renderAgentTree(agentTree) {
   }
 }
 
-function renderQuotaCard(prefix, bucket, healthyColorVar) {
+function renderQuotaCard(prefix, bucket) {
   const pctEl = document.getElementById(`${prefix}-pct`);
   const resetEl = document.getElementById(`${prefix}-reset`);
   const barEl = document.getElementById(`${prefix}-bar`);
@@ -105,15 +105,15 @@ function renderQuotaCard(prefix, bucket, healthyColorVar) {
   } else if (pct < 50) {
     barEl.style.background = "var(--tt-warning)";
   } else {
-    barEl.style.background = `var(${healthyColorVar})`;
+    barEl.style.background = "var(--tt-success)";
   }
 }
 
 function renderQuotas(quota) {
-  renderQuotaCard("tt-g5h", quota?.gemini?.fiveHour, "--tt-primary");
-  renderQuotaCard("tt-gwk", quota?.gemini?.weekly, "--tt-primary");
-  renderQuotaCard("tt-3p5h", quota?.thirdParty?.fiveHour, "--tt-success");
-  renderQuotaCard("tt-3pwk", quota?.thirdParty?.weekly, "--tt-success");
+  renderQuotaCard("tt-g5h", quota?.gemini?.fiveHour);
+  renderQuotaCard("tt-gwk", quota?.gemini?.weekly);
+  renderQuotaCard("tt-3p5h", quota?.thirdParty?.fiveHour);
+  renderQuotaCard("tt-3pwk", quota?.thirdParty?.weekly);
 }
 
 function buildFallbackTreeFromTelemetry(data) {
@@ -124,16 +124,21 @@ function buildFallbackTreeFromTelemetry(data) {
   const convName = typeof data.conversationName === "string" && data.conversationName.trim()
     ? data.conversationName.trim()
     : null;
+  const subagentType = typeof data.subagentType === "string" && data.subagentType.trim()
+    ? data.subagentType.trim()
+    : null;
+  const runState = data.runState || "idle";
   return {
     roots: [
       {
         conversationId: convId,
         shortId: convId.length > 8 ? convId.slice(0, 8) : convId,
         conversationName: convName,
+        subagentType,
         isCurrent: true,
-        isActive: true,
-        runState: data.runState || "idle",
-        lastActivityAt: data.lastActivityAt || new Date().toISOString(),
+        isActive: runState === "running" || runState === "waiting",
+        runState,
+        lastActivityAt: data.lastActivityAt || null,
         modelName: data.model?.displayName || "Unknown",
         currentTokensFormatted: data.contextWindow?.currentTokensFormatted || "0",
         maxTokensFormatted: data.contextWindow?.maxTokensFormatted || "1.05M",

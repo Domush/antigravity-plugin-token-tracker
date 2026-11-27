@@ -1,0 +1,13 @@
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.context-mode/
+dist/
+coverage/
+test-results.xml
+.tmp/

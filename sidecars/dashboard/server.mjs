@@ -9,11 +9,13 @@ import path from "node:path";
 import http from "node:http";
 import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { ConversationTracker, buildCompactionMetrics } from "../../lib/conversation-tracker.js";
-import { applyModelUsageMetrics, applyModelUsageToTreeNode } from "../../lib/compaction.js";
-import { DEFAULT_CONTEXT_WINDOW } from "../../lib/models.js";
+import { ConversationTracker } from "../../lib/conversation-tracker.js";
 import { QuotaService } from "../../lib/quota-service.js";
-import { findActiveAgentTree } from "../../lib/agent-tree.js";
+import {
+  normalizeConversationId,
+  parseIncludeAgentsFlag,
+  buildTelemetryPayload
+} from "./telemetry-payload.mjs";
 
 const NO_CACHE_HEADERS = {
   "Cache-Control": "no-store, no-cache, must-revalidate",
@@ -28,24 +30,6 @@ const APP_JS_FILE = path.join(__dirname, "app.js");
 
 const tracker = new ConversationTracker();
 const quotaService = new QuotaService();
-
-function normalizeConversationId(value) {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-function parseIncludeAgentsFlag(value) {
-  if (value === undefined || value === null || value === "") return true;
-  if (value === false || value === 0) return false;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (normalized === "0" || normalized === "false") {
-      return false;
-    }
-  }
-  return true;
-}
 
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
@@ -95,12 +79,12 @@ function getPackageVersion() {
     const pkgPath = path.join(__dirname, "../../package.json");
     if (fs.existsSync(pkgPath)) {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-      return pkg.version || "1.0.0";
+      return pkg.version || "1.1.0";
     }
   } catch {
     // Non-fatal package read
   }
-  return "1.0.0";
+  return "1.1.0";
 }
 
 function getRenderedHtml() {
@@ -109,161 +93,18 @@ function getRenderedHtml() {
   return raw.replace(/id="tt-dash-version">--<\/span>/g, `id="tt-dash-version">v${version}</span>`);
 }
 
-function getRenderedCss() {
-  return fs.readFileSync(CSS_FILE, "utf8");
-}
+const getRenderedCss = () => fs.readFileSync(CSS_FILE, "utf8");
+const getRenderedCardsJs = () => fs.readFileSync(CARDS_JS_FILE, "utf8");
+const getRenderedAppJs = () => fs.readFileSync(APP_JS_FILE, "utf8");
 
-function getRenderedCardsJs() {
-  return fs.readFileSync(CARDS_JS_FILE, "utf8");
-}
-
-function getRenderedAppJs() {
-  return fs.readFileSync(APP_JS_FILE, "utf8");
-}
-
-async function getTelemetryPayload(preferredConvId = null, forceRefresh = false, { includeAgents = true } = {}) {
-  const explicitConvId = normalizeConversationId(preferredConvId);
-  let convId = explicitConvId;
-  if (!convId) {
-    try {
-      const activeFile = path.join(os.homedir(), ".gemini", "antigravity", "plugin_data", "token-tracker", "active_conversation.json");
-      if (fs.existsSync(activeFile)) {
-        const parsed = JSON.parse(fs.readFileSync(activeFile, "utf8"));
-        convId = normalizeConversationId(parsed.conversationId);
-      }
-    } catch {
-      // Non-fatal state read
-    }
-  }
-
-  let metrics = null;
-  let quota = null;
-  let cascadeStatuses = null;
-  let mainUsage = null;
-  let trackerError = null;
-  let quotaError = null;
-
-  try {
-    metrics = tracker.getConversationMetrics(convId, { strict: Boolean(explicitConvId) });
-  } catch (err) {
-    trackerError = err.message;
-  }
-
-  const quotaPromise = quotaService.getQuotaSummary(forceRefresh).catch((err) => {
-    quotaError = err.message;
-    return null;
+function getTelemetryPayload(preferredConvId = null, forceRefresh = false, { includeAgents = true } = {}) {
+  return buildTelemetryPayload({
+    tracker,
+    quotaService,
+    preferredConvId,
+    forceRefresh,
+    includeAgents
   });
-  const cascadePromise = includeAgents
-    ? quotaService.getCascadeStatuses(forceRefresh).catch(() => null)
-    : Promise.resolve(null);
-  const mainUsagePromise = metrics?.conversationId
-    ? quotaService.getCascadeUsage(metrics.conversationId, metrics.stepCount, forceRefresh).catch(() => null)
-    : Promise.resolve(null);
-
-  [quota, cascadeStatuses, mainUsage] = await Promise.all([quotaPromise, cascadePromise, mainUsagePromise]);
-
-  if (metrics && mainUsage) {
-    metrics = applyModelUsageMetrics(metrics, mainUsage, tracker.compactionThresholdBytes);
-  }
-
-  let agentTree = null;
-  if (includeAgents) {
-    try {
-      const currentConvId = metrics?.conversationId || convId || null;
-      agentTree = findActiveAgentTree({
-        conversationsDir: tracker.conversationsDir,
-        currentConversationId: currentConvId,
-        tracker,
-        cascadeStatuses
-      });
-
-      if (agentTree?.roots?.length > 0) {
-        const treeNodes = [];
-        for (const root of agentTree.roots) {
-          treeNodes.push(root);
-          if (Array.isArray(root.children)) {
-            treeNodes.push(...root.children);
-          }
-        }
-        await Promise.all(
-          treeNodes.map(async (node) => {
-            if (!node?.conversationId) return;
-            const usage = node.conversationId === metrics?.conversationId && mainUsage
-              ? mainUsage
-              : await quotaService.getCascadeUsage(node.conversationId, node.stepCount ?? null, forceRefresh).catch(() => null);
-            if (usage) {
-              applyModelUsageToTreeNode(node, usage, tracker.compactionThresholdBytes);
-              if (usage.isWaitingForUser) {
-                node.runState = "waiting";
-              }
-            }
-          })
-        );
-      }
-    } catch (err) {
-      console.error(`[TokenTracker Sidecar] Agent tree scan non-fatal error: ${err.message}`);
-    }
-  }
-
-  const resolvedConvId = metrics?.conversationId || convId || "unknown";
-  let conversationName = null;
-  if (agentTree?.roots) {
-    for (const root of agentTree.roots) {
-      if (root.conversationId === resolvedConvId && root.conversationName) {
-        conversationName = root.conversationName;
-        break;
-      }
-    }
-  }
-
-  return {
-    ok: Boolean(metrics || quota),
-    timestamp: Date.now(),
-    conversationId: resolvedConvId,
-    ...(conversationName ? { conversationName } : {}),
-    ...(mainUsage?.isWaitingForUser ? { runState: "waiting" } : {}),
-    ...(metrics?.lastModified ? { lastActivityAt: metrics.lastModified } : {}),
-    stepCount: metrics?.stepCount || 0,
-    model: metrics?.model || {
-      id: "gemini-3.8-flash-high",
-      displayName: "Gemini 3.8 Flash (High)",
-      maxTokens: DEFAULT_CONTEXT_WINDOW,
-      group: "gemini"
-    },
-    contextWindow: metrics?.contextWindow || {
-      currentTokens: 0,
-      maxTokens: DEFAULT_CONTEXT_WINDOW,
-      percentUsed: 0,
-      contextBytes: 0,
-      currentTokensFormatted: "0",
-      maxTokensFormatted: "1.05M"
-    },
-    cache: metrics?.cache || {
-      cachedTokens: 0,
-      uncachedTokens: 0,
-      totalTokens: 0,
-      hitRatio: 0,
-      hitRatioPercent: 0,
-      cachedTokensFormatted: "0",
-      uncachedTokensFormatted: "0"
-    },
-    compaction: metrics?.compaction || buildCompactionMetrics(0, DEFAULT_CONTEXT_WINDOW, tracker.compactionThresholdBytes, 0),
-    quota: quota || {
-      gemini: {
-        weekly: { remainingFraction: 1, remainingPercent: 100, usedPercent: 0, countdown: "Ready" },
-        fiveHour: { remainingFraction: 1, remainingPercent: 100, usedPercent: 0, countdown: "Ready" }
-      },
-      thirdParty: {
-        weekly: { remainingFraction: 1, remainingPercent: 100, usedPercent: 0, countdown: "Ready" },
-        fiveHour: { remainingFraction: 1, remainingPercent: 100, usedPercent: 0, countdown: "Ready" }
-      }
-    },
-    errors: {
-      tracker: trackerError,
-      quota: quotaError
-    },
-    ...(includeAgents ? { agentTree } : {})
-  };
 }
 
 // Sidecar SDK Dynamic Import

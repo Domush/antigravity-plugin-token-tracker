@@ -14,7 +14,7 @@ Production-grade Hybrid Token Tracker plugin for Antigravity providing real-time
    - Cache hit ratio percentage reflecting prefix caching gains.
 3. **Context Compaction Headroom**:
    - Tracks active prompt context size relative to each model's context window capacity.
-   - Calculates remaining tokens and KB headroom until automatic compaction is triggered (~80% of the active model's context window).
+   - Calculates remaining tokens and KB headroom until Antigravity's per-model automatic compaction trigger is reached (such as 512k for Gemini 4, 256k for Gemini 3.x Flash, and 160k for 200k Claude models).
    - Generates proactive compaction advisory warnings as active context approaches the compaction trigger.
 4. **Language Server Connect-RPC Quota Telemetry**:
    - Direct integration with local Language Server `RetrieveUserQuotaSummary` RPC over HTTP.
@@ -22,7 +22,7 @@ Production-grade Hybrid Token Tracker plugin for Antigravity providing real-time
    - Live 5-Hour and Weekly limits with human-readable reset countdowns (e.g. `1h 25m`, `5d 14h`) for both Gemini Models and Claude/GPT 3P models.
 5. **Synchronized Dual Interface**:
    - **In-Input-Box Status Pill**: Injected directly into `#antigravity.agentSidePanelInputBox` to the left of the `Turbo ∨` Local Permissions selector. Displays live pill summary with color-coded status dot and interactive hover/click telemetry popover card.
-   - **Native Aux Pane Sidecar Web UI**: Official `SIDECAR_UI_ENTRYPOINT_AUX_PANE` dashboard in `sidecars/dashboard/` displaying a compact 4-across quota strip (`Gemini 5-Hour`, `Gemini Weekly`, `Claude/GPT 5-Hour`, `Claude/GPT Weekly`), a live Active Agents tree grouping active main sessions and currently running subagents with circular SVG rings and compact metrics, dark/light Antigravity theme synchronization, and a toggle between text and ring views for active subagents.
+   - **Native Aux Pane Sidecar Web UI**: Official `SIDECAR_UI_ENTRYPOINT_AUX_PANE` dashboard in `sidecars/dashboard/` displaying a compact 4-across health color-coded quota strip (`Gemini 5-Hour`, `Gemini Weekly`, `Claude/GPT 5-Hour`, `Claude/GPT Weekly`), a live Active Agents tree with mirrored conversation status icons (processing, waiting for response, error, and idle duration), clickable conversation and subagent titles for instant navigation, health color-coded circular progress rings (default view) and compact metrics, dark/light Antigravity theme synchronization, and a header toggle between ring and text views for active subagents.
 
 ---
 
@@ -30,10 +30,13 @@ Production-grade Hybrid Token Tracker plugin for Antigravity providing real-time
 
 ```
 antigravity-plugin-token-tracker/
+├── assets/
+│   └── icon.svg                   # Plugin vector icon badge
 ├── bin/
 │   └── cli.js                     # Unified NPX CLI entry point (install/injector)
 ├── package.json                   # Manifest & npm lifecycle scripts
 ├── plugin.json                    # Antigravity plugin descriptor
+├── CHANGELOG.md                   # Release history and version notes
 ├── hooks.json                     # SessionStart & PreInvocation hook declarations
 ├── mcp_config.json                # On-demand Token Tracker status tool registration
 ├── hooks/
@@ -81,7 +84,7 @@ Install the plugin directly into Google Antigravity using `npx`:
 > **Note:** Antigravity requires a standard copied plugin directory rather than a symlink or Windows junction. Run the `npx` install command below to deploy a clean copy into your plugins folder.
 
 ```bash
-# Install plugin into Antigravity plugins directory (~/.gemini/config/plugins/)
+# Install plugin into Antigravity plugins directory (~/.gemini/config/plugins/token-tracker/)
 npx antigravity-plugin-token-tracker install
 
 # Inject real-time status-bar pill into Antigravity input box
@@ -95,14 +98,14 @@ npx antigravity-plugin-token-tracker uninstall
 
 | Command | Description |
 | :--- | :--- |
-| `npx antigravity-plugin-token-tracker install` | Installs plugin into global Antigravity config directory (`~/.gemini/config/plugins/`) |
-| `npx antigravity-plugin-token-tracker install --workspace` | Installs plugin into current workspace (`.gemini/plugins/`) |
+| `npx antigravity-plugin-token-tracker install` | Installs plugin into global Antigravity config directory (`~/.gemini/config/plugins/token-tracker/`) |
+| `npx antigravity-plugin-token-tracker install --workspace` | Installs plugin into current workspace (`.gemini/plugins/token-tracker/`) |
 | `npx antigravity-plugin-token-tracker uninstall` | Removes plugin from global Antigravity config directory |
 | `npx antigravity-plugin-token-tracker uninstall --workspace` | Removes plugin from current workspace directory |
 | `npx antigravity-plugin-token-tracker install-injector` | Patches Electron `app.asar` to enable the status-bar pill |
 | `npx antigravity-plugin-token-tracker install-injector --dry-run` | Validates ASAR patching integrity without mutating files |
 | `npx antigravity-plugin-token-tracker uninstall-injector` | Restores pristine `app.asar` from backup and unlinks script |
-| `npx antigravity-plugin-token-tracker --version` | Displays current version (`v1.0.0`) |
+| `npx antigravity-plugin-token-tracker --version` | Displays current version (`v1.1.0`) |
 | `npx antigravity-plugin-token-tracker --help` | Displays CLI usage instructions and options |
 
 ---

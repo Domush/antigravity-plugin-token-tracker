@@ -117,7 +117,14 @@ export async function runAllTests() {
 
     const pModule = await import("../hooks/pre-invocation.js");
     assert.strictEqual(pModule[Symbol.toStringTag], "Module");
-    assert.strictEqual(Object.isFrozen(pModule), true);
+    assert.strictEqual(Object.isSealed(pModule), true);
+    assert.strictEqual(Object.isExtensible(pModule), false);
+    assert.strictEqual(typeof pModule.shouldEmitCompactionAdvisory, "function");
+    assert.strictEqual(pModule.ADVISORY_COOLDOWN_MS, 120000);
+    assert.throws(() => {
+      pModule.ADVISORY_COOLDOWN_MS = 0;
+    }, TypeError);
+    assert.strictEqual(pModule.ADVISORY_COOLDOWN_MS, 120000);
 
     const hookOutput = execFileSync(process.execPath, [path.resolve("hooks/pre-invocation.js")], {
       input: JSON.stringify({ conversationId: "test-non-existent-session-for-hook" }),

@@ -33,7 +33,7 @@
   function formatIdleElapsed(timestampValue) {
     if (!timestampValue) return "";
     const ms = new Date(timestampValue).getTime();
-    if (!Number.isFinite(ms)) return "";
+    if (!Number.isFinite(ms) || ms <= 0) return "";
     const diffSec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
     if (diffSec < 60) return "<1m";
     const diffMin = Math.floor(diffSec / 60);
@@ -114,27 +114,27 @@
 
   function onSelectConversation(conversationId) {
     const id = typeof conversationId === "string" ? conversationId.trim() : "";
-    if (!id) return;
+    if (!id || id === "--") return;
     if (typeof window.sidecar?.ui?.toggleConversation === "function") {
       window.sidecar.ui.toggleConversation(id);
       return;
     }
-    window.location.search = `?conversationId=${encodeURIComponent(id)}`;
+    const url = new URL(window.location.href);
+    url.searchParams.set("conversationId", id);
+    window.location.href = url.toString();
   }
 
+  const HEALTH_COLOR_VARS = {
+    ok: "--tt-success",
+    warn: "--tt-warning",
+    danger: "--tt-danger"
+  };
+
   function resolveRingColorVar(metricKind, pct) {
-    const value = clampPercent(pct);
-    if (metricKind === "cache") {
-      if (value < 20) return "--tt-danger";
-      return "--tt-success";
-    }
-    if (metricKind === "compaction") {
-      if (value >= 85) return "--tt-danger";
-      return "--tt-warning";
-    }
-    if (value >= 85) return "--tt-danger";
-    if (value >= 60) return "--tt-warning";
-    return "--tt-primary";
+    const healthClass = metricKind === "cache"
+      ? healthClassCache(pct)
+      : healthClassUsage(pct);
+    return HEALTH_COLOR_VARS[healthClass];
   }
 
   function makeMiniRing(pct, colorVar, label) {
@@ -244,13 +244,40 @@
     btn.className = `conv-link ${className}`;
     btn.textContent = displayText;
     const rawId = typeof conversationId === "string" ? conversationId.trim() : "";
-    btn.title = displayText !== rawId && rawId
-      ? `Open conversation: ${displayText} (${rawId})`
-      : `Open conversation: ${rawId || displayText}`;
-    if (rawId && rawId !== "--") {
-      btn.addEventListener("click", () => onSelectConversation(rawId));
+    if (!rawId || rawId === "--") {
+      btn.disabled = true;
+      btn.title = "No conversation available";
+      btn.setAttribute("aria-label", `${displayText} (no conversation available)`);
+      return btn;
     }
+    const label = displayText !== rawId
+      ? `Open conversation: ${displayText} (${rawId})`
+      : `Open conversation: ${rawId}`;
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.addEventListener("click", () => onSelectConversation(rawId));
     return btn;
+  }
+
+  function buildMetaRow(node, fallbackRole, rowClass, roleClass, modelClass) {
+    const row = document.createElement("div");
+    row.className = rowClass;
+
+    const roleEl = document.createElement("span");
+    roleEl.className = roleClass;
+    const roleText = typeof node.subagentType === "string" && node.subagentType.trim()
+      ? node.subagentType.trim()
+      : fallbackRole;
+    roleEl.textContent = roleText;
+    roleEl.title = roleText;
+
+    const modelEl = document.createElement("span");
+    modelEl.className = modelClass;
+    modelEl.textContent = node.modelName || "Unknown";
+    modelEl.title = node.modelName || "Unknown";
+
+    row.append(roleEl, modelEl);
+    return row;
   }
 
   function buildMainCard(root) {
@@ -274,9 +301,7 @@
 
     const convName = typeof root.conversationName === "string" ? root.conversationName.trim() : "";
     const shortId = typeof root.shortId === "string" && root.shortId.trim() ? root.shortId.trim() : "--";
-    const convId = typeof root.conversationId === "string" && root.conversationId.trim()
-      ? root.conversationId.trim()
-      : shortId;
+    const convId = typeof root.conversationId === "string" ? root.conversationId.trim() : "";
 
     idGroup.appendChild(
       buildConversationLinkButton(
@@ -286,12 +311,9 @@
       )
     );
 
-    const modelEl = document.createElement("span");
-    modelEl.className = "model-tag";
-    modelEl.textContent = root.modelName || "Unknown";
-    modelEl.title = root.modelName || "Unknown";
+    head.appendChild(idGroup);
 
-    head.append(idGroup, modelEl);
+    const metaRow = buildMetaRow(root, "main", "main-meta-row", "main-role", "main-model-name");
 
     const body = document.createElement("div");
     body.className = "main-body";
@@ -302,7 +324,7 @@
     const stack = makeMetricsStack(root, "metrics-stack");
 
     body.append(trio, stack);
-    card.append(head, body);
+    card.append(head, metaRow, body);
     return card;
   }
 
@@ -315,9 +337,7 @@
 
     const subName = typeof sub.subagentName === "string" ? sub.subagentName.trim() : "";
     const shortId = typeof sub.shortId === "string" && sub.shortId.trim() ? sub.shortId.trim() : "--";
-    const convId = typeof sub.conversationId === "string" && sub.conversationId.trim()
-      ? sub.conversationId.trim()
-      : shortId;
+    const convId = typeof sub.conversationId === "string" ? sub.conversationId.trim() : "";
 
     head.append(
       buildStatusIndicator(sub),
@@ -328,25 +348,7 @@
       )
     );
     card.appendChild(head);
-
-    const metaRow = document.createElement("div");
-    metaRow.className = "sub-meta-row";
-
-    const role = document.createElement("span");
-    role.className = "sub-role";
-    const subType = typeof sub.subagentType === "string" && sub.subagentType.trim()
-      ? sub.subagentType.trim()
-      : "subagent";
-    role.textContent = subType;
-    role.title = subType;
-
-    const modelEl = document.createElement("span");
-    modelEl.className = "sub-model-name";
-    modelEl.textContent = sub.modelName || "Unknown";
-    modelEl.title = sub.modelName || "Unknown";
-
-    metaRow.append(role, modelEl);
-    card.appendChild(metaRow);
+    card.appendChild(buildMetaRow(sub, "subagent", "sub-meta-row", "sub-role", "sub-model-name"));
 
     if (subagentDisplayMode === "graphic") {
       const ringsRow = makeRingsTrio(sub);

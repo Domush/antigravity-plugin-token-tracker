@@ -13,20 +13,33 @@ import { fileURLToPath } from "node:url";
 import {
   parseCliArgs,
   resolveTargetDir,
+  resolveLegacyTargetDir,
   installPlugin,
   uninstallPlugin,
   getPackageVersion,
+  PLUGIN_DIR_NAME,
+  LEGACY_PLUGIN_DIR_NAME,
   ESSENTIAL_FILES,
   ESSENTIAL_DIRS
 } from "../bin/cli.js";
 import { computeFileHash } from "../injector/install.js";
 import { buildSyntheticAsar } from "./test_injector_offset.js";
+import { registerCliMigrationTests } from "./test_cli_migration.js";
 import { registerCliSymlinkTests } from "./test_cli_symlinks.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..");
 const cliPath = path.resolve(rootDir, "bin", "cli.js");
+
+function assertInstalledBundle(installDir) {
+  for (const file of ESSENTIAL_FILES) {
+    assert.strictEqual(fs.existsSync(path.join(installDir, file)), true, `Missing file: ${file}`);
+  }
+  for (const dir of ESSENTIAL_DIRS) {
+    assert.strictEqual(fs.existsSync(path.join(installDir, dir)), true, `Missing dir: ${dir}`);
+  }
+}
 
 /**
  * Runs the CLI test suite.
@@ -36,16 +49,19 @@ export async function runCliTests() {
   console.log("--- Running test_cli.js ---");
   let passed = 0;
   let failed = 0;
+  const pendingTests = [];
 
   function test(name, fn) {
-    try {
-      fn();
-      console.log(`  [PASS] ${name}`);
-      passed++;
-    } catch (err) {
-      console.error(`  [FAIL] ${name}: ${err.message}`);
-      failed++;
-    }
+    pendingTests.push(async () => {
+      try {
+        await fn();
+        console.log(`  [PASS] ${name}`);
+        passed++;
+      } catch (err) {
+        console.error(`  [FAIL] ${name}: ${err.message}`);
+        failed++;
+      }
+    });
   }
 
   // 1. Argument Parser Unit & Boundary Tests
@@ -92,38 +108,45 @@ export async function runCliTests() {
     assert.strictEqual(res6.flags.unknownFlag, "--unknown-flag");
   });
 
-  // 2. Target Directory Resolution & Env Precedence
-  test("cli: resolveTargetDir respects workspace, USERPROFILE precedence, HOME, and os.homedir fallback", () => {
-    const customCwd = path.join(os.tmpdir(), "ag-custom-workspace");
-    const workspaceTarget = resolveTargetDir({ workspace: true, cwd: customCwd });
-    assert.strictEqual(workspaceTarget, path.join(customCwd, ".gemini", "plugins", "antigravity-plugin-token-tracker"));
+  // 2. Target & Legacy Directory Resolution & Env Precedence
+  test("cli: resolveTargetDir and resolveLegacyTargetDir respect workspace, USERPROFILE, HOME, and os.homedir", () => {
+    assert.strictEqual(PLUGIN_DIR_NAME, "token-tracker");
+    assert.strictEqual(LEGACY_PLUGIN_DIR_NAME, "antigravity-plugin-token-tracker");
 
+    const customCwd = path.join(os.tmpdir(), "ag-custom-workspace");
     const savedUserProfile = process.env.USERPROFILE;
     const savedHome = process.env.HOME;
     const fakeProfile = path.join(os.tmpdir(), "ag-fake-profile");
     const fakeHome = path.join(os.tmpdir(), "ag-fake-home");
 
     try {
-      process.env.USERPROFILE = fakeProfile;
-      process.env.HOME = fakeHome;
-      assert.strictEqual(
-        resolveTargetDir({ workspace: false }),
-        path.join(fakeProfile, ".gemini", "config", "plugins", "antigravity-plugin-token-tracker")
-      );
-
-      delete process.env.USERPROFILE;
-      process.env.HOME = fakeHome;
-      assert.strictEqual(
-        resolveTargetDir({ workspace: false }),
-        path.join(fakeHome, ".gemini", "config", "plugins", "antigravity-plugin-token-tracker")
-      );
-
-      delete process.env.USERPROFILE;
-      delete process.env.HOME;
-      assert.strictEqual(
-        resolveTargetDir({ workspace: false }),
-        path.join(os.homedir(), ".gemini", "config", "plugins", "antigravity-plugin-token-tracker")
-      );
+      for (const [resolver, dirName] of [
+        [resolveTargetDir, PLUGIN_DIR_NAME],
+        [resolveLegacyTargetDir, LEGACY_PLUGIN_DIR_NAME]
+      ]) {
+        assert.strictEqual(
+          resolver({ workspace: true, cwd: customCwd }),
+          path.join(customCwd, ".gemini", "plugins", dirName)
+        );
+        process.env.USERPROFILE = fakeProfile;
+        process.env.HOME = fakeHome;
+        assert.strictEqual(
+          resolver({ workspace: false }),
+          path.join(fakeProfile, ".gemini", "config", "plugins", dirName)
+        );
+        delete process.env.USERPROFILE;
+        process.env.HOME = fakeHome;
+        assert.strictEqual(
+          resolver({ workspace: false }),
+          path.join(fakeHome, ".gemini", "config", "plugins", dirName)
+        );
+        delete process.env.USERPROFILE;
+        delete process.env.HOME;
+        assert.strictEqual(
+          resolver({ workspace: false }),
+          path.join(os.homedir(), ".gemini", "config", "plugins", dirName)
+        );
+      }
     } finally {
       if (savedUserProfile !== undefined) process.env.USERPROFILE = savedUserProfile;
       else delete process.env.USERPROFILE;
@@ -133,21 +156,22 @@ export async function runCliTests() {
   });
 
   // 3. Package Version Extraction & Malformed Fallback
-  test("cli: getPackageVersion extracts version and falls back on missing or malformed package.json", () => {
-    const version = getPackageVersion(rootDir);
-    assert.strictEqual(typeof version, "string");
-    assert.strictEqual(/^\d+\.\d+\.\d+/.test(version), true);
-
+  test("cli: getPackageVersion extracts version and falls back to 1.1.0 on missing or malformed package.json", () => {
+    assert.strictEqual(getPackageVersion(rootDir), "1.1.0");
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ag-tt-pkg-"));
     try {
       const emptyDir = path.join(tempDir, "empty");
       const malformedDir = path.join(tempDir, "malformed");
+      const noVersionDir = path.join(tempDir, "no-version");
       fs.mkdirSync(emptyDir, { recursive: true });
       fs.mkdirSync(malformedDir, { recursive: true });
+      fs.mkdirSync(noVersionDir, { recursive: true });
       fs.writeFileSync(path.join(malformedDir, "package.json"), "{invalid-json", "utf8");
+      fs.writeFileSync(path.join(noVersionDir, "package.json"), "{}", "utf8");
 
-      assert.strictEqual(getPackageVersion(emptyDir), "1.0.0");
-      assert.strictEqual(getPackageVersion(malformedDir), "1.0.0");
+      assert.strictEqual(getPackageVersion(emptyDir), "1.1.0");
+      assert.strictEqual(getPackageVersion(malformedDir), "1.1.0");
+      assert.strictEqual(getPackageVersion(noVersionDir), "1.1.0");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -158,7 +182,8 @@ export async function runCliTests() {
     for (const args of [["--help"], ["-h"], []]) {
       const res = spawnSync(process.execPath, [cliPath, ...args], { encoding: "utf8" });
       assert.strictEqual(res.status, 0, `expected exit 0 for args [${args.join(" ")}]: ${res.stderr}`);
-      assert.strictEqual(res.stdout.includes("Antigravity Token Tracker CLI"), true);
+      assert.strictEqual(res.stdout.includes("Token Tracker CLI"), true);
+      assert.strictEqual(res.stdout.includes("token-tracker"), true);
       assert.strictEqual(res.stdout.includes("Commands:"), true);
       assert.strictEqual(res.stdout.includes("install"), true);
     }
@@ -166,13 +191,11 @@ export async function runCliTests() {
 
   // 5. CLI Process Invocation: --version and -v
   test("cli: process invocation for --version and -v exits with code 0", () => {
-    const runVersion = spawnSync(process.execPath, [cliPath, "--version"], { encoding: "utf8" });
-    assert.strictEqual(runVersion.status, 0);
-    assert.strictEqual(runVersion.stdout.trim().startsWith("antigravity-plugin-token-tracker v"), true);
-
-    const runShortVersion = spawnSync(process.execPath, [cliPath, "-v"], { encoding: "utf8" });
-    assert.strictEqual(runShortVersion.status, 0);
-    assert.strictEqual(runShortVersion.stdout.trim().startsWith("antigravity-plugin-token-tracker v"), true);
+    for (const flag of ["--version", "-v"]) {
+      const res = spawnSync(process.execPath, [cliPath, flag], { encoding: "utf8" });
+      assert.strictEqual(res.status, 0);
+      assert.strictEqual(res.stdout.trim(), "antigravity-plugin-token-tracker v1.1.0");
+    }
   });
 
   // 6. CLI Process Invocation: Invalid Command & Unknown Flag
@@ -188,6 +211,7 @@ export async function runCliTests() {
 
   // 7. CLI Workspace & Global Install/Uninstall Lifecycles (Isolated)
   test("cli: install/uninstall --workspace and --global lifecycles with strict directory isolation", () => {
+    assert.strictEqual(ESSENTIAL_FILES.includes("CHANGELOG.md"), true);
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "ag-tt-cli-test-"));
 
     try {
@@ -196,47 +220,31 @@ export async function runCliTests() {
       fs.mkdirSync(workspaceDir, { recursive: true });
       fs.mkdirSync(fakeHome, { recursive: true });
 
-      const expectedWorkspaceInstall = path.join(workspaceDir, ".gemini", "plugins", "antigravity-plugin-token-tracker");
-      const expectedGlobalInstall = path.join(fakeHome, ".gemini", "config", "plugins", "antigravity-plugin-token-tracker");
+      const expectedWs = path.join(workspaceDir, ".gemini", "plugins", "token-tracker");
+      const expectedGlobal = path.join(fakeHome, ".gemini", "config", "plugins", "token-tracker");
       const childEnv = { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome };
-      // Workspace lifecycle
-      const installRes = spawnSync(process.execPath, [cliPath, "install", "--workspace"], {
-        cwd: workspaceDir,
-        encoding: "utf8"
-      });
+
+      const installRes = spawnSync(process.execPath, [cliPath, "install", "--workspace"], { cwd: workspaceDir, encoding: "utf8" });
       assert.strictEqual(installRes.status, 0, `Install failed: ${installRes.stderr}`);
-      for (const file of ESSENTIAL_FILES) {
-        assert.strictEqual(fs.existsSync(path.join(expectedWorkspaceInstall, file)), true, `Missing file: ${file}`);
-      }
-      for (const dir of ESSENTIAL_DIRS) {
-        assert.strictEqual(fs.existsSync(path.join(expectedWorkspaceInstall, dir)), true, `Missing dir: ${dir}`);
-      }
+      assertInstalledBundle(expectedWs);
 
-      const reinstallRes = spawnSync(process.execPath, [cliPath, "install", "-w"], { cwd: workspaceDir, encoding: "utf8" });
-      assert.strictEqual(reinstallRes.status, 0);
-
+      assert.strictEqual(spawnSync(process.execPath, [cliPath, "install", "-w"], { cwd: workspaceDir, encoding: "utf8" }).status, 0);
       const uninstallRes = spawnSync(process.execPath, [cliPath, "uninstall", "--workspace"], { cwd: workspaceDir, encoding: "utf8" });
       assert.strictEqual(uninstallRes.status, 0, `Uninstall failed: ${uninstallRes.stderr}`);
-      assert.strictEqual(fs.existsSync(expectedWorkspaceInstall), false);
+      assert.strictEqual(fs.existsSync(expectedWs), false);
 
       const reUninstallRes = spawnSync(process.execPath, [cliPath, "uninstall", "-w"], { cwd: workspaceDir, encoding: "utf8" });
       assert.strictEqual(reUninstallRes.status, 0);
       assert.strictEqual(reUninstallRes.stdout.includes("Plugin not found"), true);
 
-      // Isolated Global lifecycle
-      const globalInstall = spawnSync(process.execPath, [cliPath, "install", "--global"], {
-        env: childEnv,
-        encoding: "utf8"
-      });
+      const globalInstall = spawnSync(process.execPath, [cliPath, "install", "--global"], { env: childEnv, encoding: "utf8" });
       assert.strictEqual(globalInstall.status, 0, `Global install failed: ${globalInstall.stderr}`);
-      assert.strictEqual(fs.existsSync(path.join(expectedGlobalInstall, "lib", "models.js")), true);
+      assertInstalledBundle(expectedGlobal);
+      assert.strictEqual(fs.existsSync(path.join(expectedGlobal, "lib", "models.js")), true);
 
-      const globalUninstall = spawnSync(process.execPath, [cliPath, "uninstall", "-g"], {
-        env: childEnv,
-        encoding: "utf8"
-      });
+      const globalUninstall = spawnSync(process.execPath, [cliPath, "uninstall", "-g"], { env: childEnv, encoding: "utf8" });
       assert.strictEqual(globalUninstall.status, 0, `Global uninstall failed: ${globalUninstall.stderr}`);
-      assert.strictEqual(fs.existsSync(expectedGlobalInstall), false);
+      assert.strictEqual(fs.existsSync(expectedGlobal), false);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -313,28 +321,19 @@ export async function runCliTests() {
       const tempTarget = path.join(tempRoot, "target");
       fs.mkdirSync(tempTarget, { recursive: true });
 
-      assert.throws(() => {
-        installPlugin({ sourceDir: missingSrc, targetDir: tempTarget });
-      }, /Source directory does not exist/);
-
-      assert.throws(() => {
-        installPlugin({ sourceDir: rootDir, targetDir: "" });
-      }, /Target installation directory must be specified/);
+      assert.throws(() => installPlugin({ sourceDir: missingSrc, targetDir: tempTarget }), /Source directory does not exist/);
+      assert.throws(() => installPlugin({ sourceDir: rootDir, targetDir: "" }), /Target installation directory must be specified/);
 
       const tempEmptySource = path.join(tempRoot, "empty-source");
       fs.mkdirSync(tempEmptySource, { recursive: true });
-      assert.throws(() => {
-        installPlugin({ sourceDir: tempEmptySource, targetDir: tempTarget });
-      }, /Required file missing from source/);
+      assert.throws(() => installPlugin({ sourceDir: tempEmptySource, targetDir: tempTarget }), /Required file missing from source/);
 
       const tempMissingDirSource = path.join(tempRoot, "missing-dir-source");
       fs.mkdirSync(tempMissingDirSource, { recursive: true });
       for (const file of ESSENTIAL_FILES) {
         fs.writeFileSync(path.join(tempMissingDirSource, file), `dummy ${file}`);
       }
-      assert.throws(() => {
-        installPlugin({ sourceDir: tempMissingDirSource, targetDir: tempTarget });
-      }, /Required directory missing from source: lib/);
+      assert.throws(() => installPlugin({ sourceDir: tempMissingDirSource, targetDir: tempTarget }), /Required directory missing from source: lib/);
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -349,16 +348,19 @@ export async function runCliTests() {
       assert.strictEqual(res.removed, false);
       assert.strictEqual(res.targetDir, nonExistent);
 
-      assert.throws(() => {
-        uninstallPlugin({ targetDir: "" });
-      }, /Target uninstallation directory must be specified/);
+      assert.throws(() => uninstallPlugin({ targetDir: "" }), /Target uninstallation directory must be specified/);
     } finally {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 
-  // 11-12. Symlink & Windows Junction Isolation Sub-Suite
+  // 11-15. Legacy Migration, Lock Handling & Symlink/Junction Isolation Sub-Suites
+  registerCliMigrationTests(test);
   registerCliSymlinkTests(test);
+
+  for (const runTest of pendingTests) {
+    await runTest();
+  }
 
   return { passed, failed };
 }

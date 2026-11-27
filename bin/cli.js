@@ -12,12 +12,24 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { runInstall } from "../injector/install.js";
 import { runUninstall } from "../injector/uninstall.js";
+import {
+  lstatOrNull,
+  canonicalizeEntryPath,
+  removePluginEntry,
+  isEntrySameOrEnclosesSource,
+  isSourceEnclosingEntry,
+  cleanupLegacyPluginDir
+} from "../lib/cli-cleanup.js";
+
+export const PLUGIN_DIR_NAME = "token-tracker";
+export const LEGACY_PLUGIN_DIR_NAME = "antigravity-plugin-token-tracker";
 
 export const ESSENTIAL_FILES = [
   "plugin.json",
   "hooks.json",
   "mcp_config.json",
   "package.json",
+  "CHANGELOG.md",
   "README.md",
   "LICENSE"
 ];
@@ -27,8 +39,20 @@ export const ESSENTIAL_DIRS = [
   "hooks",
   "injector",
   "mcp",
-  "sidecars"
+  "sidecars",
+  "assets"
 ];
+
+function resolvePluginDir(pluginDirName, { workspace = false, cwd = process.cwd() } = {}) {
+  if (workspace) {
+    return path.join(cwd, ".gemini", "plugins", pluginDirName);
+  }
+  const homeDir = process.env.USERPROFILE || process.env.HOME || os.homedir() || "";
+  if (!homeDir) {
+    throw new Error("Could not determine user home directory for global installation.");
+  }
+  return path.join(homeDir, ".gemini", "config", "plugins", pluginDirName);
+}
 
 /**
  * Resolves the target installation directory based on flags.
@@ -38,47 +62,18 @@ export const ESSENTIAL_DIRS = [
  * @returns {string}
  */
 export function resolveTargetDir({ workspace = false, cwd = process.cwd() } = {}) {
-  if (workspace) {
-    return path.join(cwd, ".gemini", "plugins", "antigravity-plugin-token-tracker");
-  }
-  const homeDir = process.env.USERPROFILE || process.env.HOME || os.homedir() || "";
-  if (!homeDir) {
-    throw new Error("Could not determine user home directory for global installation.");
-  }
-  return path.join(homeDir, ".gemini", "config", "plugins", "antigravity-plugin-token-tracker");
+  return resolvePluginDir(PLUGIN_DIR_NAME, { workspace, cwd });
 }
 
 /**
- * Returns fs.lstatSync result or null when the path does not exist (ENOENT).
- * @param {string} targetPath
- * @returns {fs.Stats|null}
+ * Resolves the legacy installation directory path for safe cleanup/migration.
+ * @param {Object} options
+ * @param {boolean} [options.workspace]
+ * @param {string} [options.cwd]
+ * @returns {string}
  */
-function lstatOrNull(targetPath) {
-  try {
-    return fs.lstatSync(targetPath);
-  } catch (err) {
-    if (err.code === "ENOENT") {
-      return null;
-    }
-    throw err;
-  }
-}
-
-/**
- * Removes a symbolic link or Windows directory junction (active or broken)
- * without touching the target directory's contents.
- * @param {string} linkPath
- */
-function removeSymlinkOrJunction(linkPath) {
-  try {
-    fs.unlinkSync(linkPath);
-  } catch (err) {
-    if (err.code === "EPERM" || err.code === "EISDIR") {
-      fs.rmdirSync(linkPath);
-    } else {
-      throw err;
-    }
-  }
+export function resolveLegacyTargetDir({ workspace = false, cwd = process.cwd() } = {}) {
+  return resolvePluginDir(LEGACY_PLUGIN_DIR_NAME, { workspace, cwd });
 }
 
 /**
@@ -86,9 +81,10 @@ function removeSymlinkOrJunction(linkPath) {
  * @param {Object} options
  * @param {string} options.sourceDir
  * @param {string} options.targetDir
+ * @param {string|null} [options.legacyDir]
  * @returns {string} Target directory path.
  */
-export function installPlugin({ sourceDir, targetDir }) {
+export function installPlugin({ sourceDir, targetDir, legacyDir = null }) {
   if (!sourceDir || !fs.existsSync(sourceDir)) {
     throw new Error(`Source directory does not exist: ${sourceDir}`);
   }
@@ -96,7 +92,6 @@ export function installPlugin({ sourceDir, targetDir }) {
     throw new Error("Target installation directory must be specified.");
   }
 
-  // Pre-verification: Ensure all required files and dirs exist in source
   for (const file of ESSENTIAL_FILES) {
     const srcFile = path.join(sourceDir, file);
     if (!fs.existsSync(srcFile)) {
@@ -110,11 +105,10 @@ export function installPlugin({ sourceDir, targetDir }) {
     }
   }
 
-  // Inspect target directory safely (handles active/broken symlinks and Windows junctions)
   const targetStat = lstatOrNull(targetDir);
   if (targetStat) {
     if (targetStat.isSymbolicLink()) {
-      removeSymlinkOrJunction(targetDir);
+      removePluginEntry(targetDir);
     } else if (!targetStat.isDirectory()) {
       throw new Error(`Target installation path exists and is not a directory: ${targetDir}`);
     } else {
@@ -130,56 +124,69 @@ export function installPlugin({ sourceDir, targetDir }) {
     }
   }
 
-  // Ensure target directory exists as a standard directory
+  if (isEntrySameOrEnclosesSource(targetDir, sourceDir)) {
+    throw new Error(`Target directory (${targetDir}) matches or encloses source directory (${sourceDir}); refusing self-overwrite.`);
+  }
+  for (const dir of ESSENTIAL_DIRS) {
+    if (isSourceEnclosingEntry(path.join(sourceDir, dir), targetDir)) {
+      throw new Error(`Target directory (${targetDir}) cannot be inside source bundle directory (${dir}).`);
+    }
+  }
+
   fs.mkdirSync(targetDir, { recursive: true });
 
-  // Copy files (removing any pre-existing symlink at destination first)
   for (const file of ESSENTIAL_FILES) {
     const src = path.join(sourceDir, file);
     const dest = path.join(targetDir, file);
     const destStat = lstatOrNull(dest);
     if (destStat && destStat.isSymbolicLink()) {
-      removeSymlinkOrJunction(dest);
+      removePluginEntry(dest);
     }
     fs.copyFileSync(src, dest);
   }
 
-  // Copy directories recursively (removing any pre-existing symlink/junction at destination first)
   for (const dir of ESSENTIAL_DIRS) {
     const src = path.join(sourceDir, dir);
     const dest = path.join(targetDir, dir);
     const destStat = lstatOrNull(dest);
     if (destStat && destStat.isSymbolicLink()) {
-      removeSymlinkOrJunction(dest);
+      removePluginEntry(dest);
     }
     fs.cpSync(src, dest, { recursive: true, force: true });
+  }
+
+  if (legacyDir) {
+    cleanupLegacyPluginDir({ legacyDir, targetDir, sourceDir });
   }
 
   return targetDir;
 }
 
 /**
- * Removes the installed plugin from target directory.
+ * Removes the installed plugin from target directory and optional legacy directory.
  * @param {Object} options
  * @param {string} options.targetDir
- * @returns {{ removed: boolean, targetDir: string }}
+ * @param {string|null} [options.legacyDir]
+ * @returns {{ removed: boolean, targetDir: string, removedTarget?: boolean, removedLegacy?: boolean, legacyDir?: string }}
  */
-export function uninstallPlugin({ targetDir }) {
+export function uninstallPlugin({ targetDir, legacyDir = null }) {
   if (!targetDir) {
     throw new Error("Target uninstallation directory must be specified.");
   }
 
-  const targetStat = lstatOrNull(targetDir);
-  if (!targetStat) {
-    return { removed: false, targetDir };
+  const removedTarget = removePluginEntry(targetDir);
+  if (!legacyDir || canonicalizeEntryPath(legacyDir) === canonicalizeEntryPath(targetDir)) {
+    return { removed: removedTarget, targetDir };
   }
 
-  if (targetStat.isSymbolicLink()) {
-    removeSymlinkOrJunction(targetDir);
-  } else {
-    fs.rmSync(targetDir, { recursive: true, force: true });
-  }
-  return { removed: true, targetDir };
+  const removedLegacy = removePluginEntry(legacyDir);
+  return {
+    removed: removedTarget || removedLegacy,
+    removedTarget,
+    removedLegacy,
+    targetDir,
+    legacyDir
+  };
 }
 
 /**
@@ -197,7 +204,7 @@ export function getPackageVersion(rootDir) {
   } catch (err) {
     console.debug("[CLI] Unable to read package.json version:", err.message);
   }
-  return "1.0.0";
+  return "1.1.0";
 }
 
 /**
@@ -207,7 +214,7 @@ export function getPackageVersion(rootDir) {
  */
 export function getHelpText(version) {
   return `
-Antigravity Token Tracker CLI (v${version})
+Token Tracker CLI (v${version})
 
 Usage:
   npx antigravity-plugin-token-tracker <command> [options]
@@ -219,8 +226,8 @@ Commands:
   uninstall-injector  Restore pristine app.asar and remove status bar injector
 
 Options:
-  --global, -g        Target global plugins directory (~/.gemini/config/plugins) [default]
-  --workspace, -w     Target current workspace (.gemini/plugins)
+  --global, -g        Target global plugins directory (~/.gemini/config/plugins/token-tracker) [default]
+  --workspace, -w     Target current workspace (.gemini/plugins/token-tracker)
   --dry-run           Simulate injector installation/uninstallation without modifying files
   --path <path>       Specify custom Antigravity resources directory for injector
   --help, -h          Show this help message
@@ -311,10 +318,11 @@ export async function main(argv = process.argv.slice(2), { exitProcess = true } 
   }
 
   if (command === "install") {
-    console.log(`\n📦 Installing Antigravity Token Tracker v${version}...`);
+    console.log(`\n📦 Installing Token Tracker v${version}...`);
     try {
       const targetDir = resolveTargetDir({ workspace: flags.workspace });
-      installPlugin({ sourceDir: rootDir, targetDir });
+      const legacyDir = resolveLegacyTargetDir({ workspace: flags.workspace });
+      installPlugin({ sourceDir: rootDir, targetDir, legacyDir });
       console.log(`\n✨ Installation complete!`);
       console.log(`📍 Location: ${targetDir}`);
       console.log(`🚀 Restart or reload Antigravity to activate the plugin.\n`);
@@ -328,11 +336,17 @@ export async function main(argv = process.argv.slice(2), { exitProcess = true } 
   if (command === "uninstall") {
     try {
       const targetDir = resolveTargetDir({ workspace: flags.workspace });
-      const { removed } = uninstallPlugin({ targetDir });
-      if (removed) {
-        console.log(`\n✔ Antigravity Token Tracker successfully removed from:`);
+      const legacyDir = resolveLegacyTargetDir({ workspace: flags.workspace });
+      const { removedTarget, removedLegacy } = uninstallPlugin({ targetDir, legacyDir });
+      if (removedTarget) {
+        console.log(`\n✔ Token Tracker successfully removed from:`);
         console.log(`  ${targetDir}\n`);
-      } else {
+      }
+      if (removedLegacy) {
+        console.log(`\n🧹 Removed legacy plugin directory:`);
+        console.log(`  ${legacyDir}\n`);
+      }
+      if (!removedTarget && !removedLegacy) {
         console.log(`\nℹ Plugin not found at:`);
         console.log(`  ${targetDir}\n`);
       }
